@@ -476,7 +476,9 @@ private:
 
 } // namespace state
 
-class cocaine::service::node::app_state_t {
+class cocaine::service::node::app_state_t
+    : public std::enable_shared_from_this<cocaine::service::node::app_state_t> {
+
     const std::unique_ptr<logging::logger_t> log;
 
     context_t& context;
@@ -555,7 +557,7 @@ public:
                 manifest(),
                 profile,
                 log.get(),
-                std::make_shared<spool_handle_t>(*this)
+                std::make_shared<spool_handle_t>(shared_from_this())
             ));
         });
     }
@@ -573,25 +575,42 @@ private:
         virtual
         void
         on_abort(const std::error_code& ec, const std::string& msg) {
-            COCAINE_LOG_ERROR(parent.log, "unable to spool app, [{}] {} - {}", ec.value(), ec.message(), msg);
+            const auto p = parent.lock();
+            if (!p) {
+                // TODO: should we inform RT (or logger) that there was nothing to abort?
+                // throw?
+                return;
+            }
+
+            COCAINE_LOG_ERROR(p->log, "unable to spool app, [{}] {} - {}", ec.value(), ec.message(), msg);
             // Dispatch the completion handler to be sure it will be called in a I/O thread to
             // avoid possible deadlocks.
-            parent.loop->dispatch(std::bind(&app_state_t::cancel, &parent, ec));
-
-            parent.deferred.abort({}, ec, msg);
+            p->loop->dispatch(std::bind(&app_state_t::cancel, p, ec));
+            p->deferred.abort({}, ec, msg);
         }
+
         virtual
         void
         on_ready() {
-            COCAINE_LOG_DEBUG(parent.log, "application has been spooled");
-            parent.loop->dispatch(std::bind(&app_state_t::publish, &parent));
+            const auto p = parent.lock();
+            if (!p) {
+                // TODO: should we inform RT (or logger) that application was never cast alive?
+                // Throw?
+                return;
+            }
+
+            COCAINE_LOG_DEBUG(p->log, "application has been spooled");
+            p->loop->dispatch(std::bind(&app_state_t::publish, p));
         }
 
-        spool_handle_t(app_state_t& _parent) :
-            parent(_parent)
+        spool_handle_t(std::shared_ptr<app_state_t> _parent) :
+            parent(move(_parent))
         {}
 
-        app_state_t& parent;
+        // It seems that spool_handle_t could survive somewhere inside isolation
+        // spool queue for undefined time, which could exceed parent's lifetime,
+        // so to allow parent to pass away in time, it is weak referenced here.
+        std::weak_ptr<app_state_t> parent;
     };
 
     void
