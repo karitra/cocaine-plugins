@@ -581,7 +581,7 @@ private:
                 // throw?
                 return;
             }
-            COCAINE_LOG_ERROR(parent.log, "unable to spool app, [{}] {} - {}", ec.value(), ec.message(), reason);
+            COCAINE_LOG_ERROR(p->log, "unable to spool app, [{}] {} - {}", ec.value(), ec.message(), reason);
             // Dispatch the completion handler to be sure it will be called in a I/O thread to
             // avoid possible deadlocks.
             p->loop->dispatch(std::bind(&app_state_t::cancel, p, ec));
