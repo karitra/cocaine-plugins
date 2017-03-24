@@ -2,16 +2,16 @@
 
 #include <blackhole/logger.hpp>
 
-#include <cocaine/logging.hpp>
 #include <cocaine/context.hpp>
 #include <cocaine/context/quote.hpp>
 #include <cocaine/errors.hpp>
-
 #include <cocaine/locked_ptr.hpp>
+#include <cocaine/logging.hpp>
 #include <cocaine/repository.hpp>
 #include <cocaine/rpc/actor.hpp>
 #include <cocaine/rpc/actor_unix.hpp>
 #include <cocaine/traits/dynamic.hpp>
+#include <cocaine/utility/future.hpp>
 
 #include "cocaine/api/isolate.hpp"
 #include "cocaine/idl/node.hpp"
@@ -487,8 +487,8 @@ class cocaine::service::node::app_state_t
 
     synchronized<state_type> state;
 
-    /// Node start request's deferred.
-    cocaine::deferred<void> deferred;
+    /// Node start request's callback.
+    std::function<void(std::future<void> future)> callback;
 
     // Configuration.
     const manifest_t manifest_;
@@ -504,12 +504,12 @@ public:
     app_state_t(context_t& context,
                 manifest_t manifest_,
                 profile_t profile_,
-                cocaine::deferred<void> deferred_,
+                std::function<void(std::future<void>)> callback,
                 std::shared_ptr<asio::io_service> loop_):
         log(context.log(format("{}/app", manifest_.name))),
         context(context),
         state(new state::stopped_t),
-        deferred(std::move(deferred_)),
+        callback(std::move(callback)),
         manifest_(std::move(manifest_)),
         profile(std::move(profile_)),
         loop(std::move(loop_)),
@@ -574,19 +574,19 @@ private:
     {
         virtual
         void
-        on_abort(const std::error_code& ec, const std::string& msg) {
+        on_abort(const std::error_code& ec, const std::string& reason) {
             const auto p = parent.lock();
             if (!p) {
                 // TODO: should we inform RT (or logger) that there was nothing to abort?
                 // throw?
                 return;
             }
-
-            COCAINE_LOG_ERROR(p->log, "unable to spool app, [{}] {} - {}", ec.value(), ec.message(), msg);
+            COCAINE_LOG_ERROR(parent.log, "unable to spool app, [{}] {} - {}", ec.value(), ec.message(), reason);
             // Dispatch the completion handler to be sure it will be called in a I/O thread to
             // avoid possible deadlocks.
             p->loop->dispatch(std::bind(&app_state_t::cancel, p, ec));
-            p->deferred.abort({}, ec, msg);
+
+            p->callback(make_exceptional_future<void>(std::system_error(ec, reason)));
         }
 
         virtual
@@ -621,20 +621,19 @@ private:
             state.synchronize()->reset(
                 new state::running_t(context, manifest(), profile, log.get(), loop)
             );
+            callback(make_ready_future());
         } catch (const std::system_error& err) {
             COCAINE_LOG_ERROR(log, "unable to publish app: {}", error::to_string(err));
             ec = err.code();
+            callback(make_exceptional_future<void>(err));
         } catch (const std::exception& err) {
             COCAINE_LOG_ERROR(log, "unable to publish app: {}", err.what());
             ec = error::uncaught_publish_error;
+            callback(make_exceptional_future<void>(error_t(error::uncaught_publish_error, err.what())));
         }
 
-        // Attempt to finish node service's request.
         if (ec) {
             cancel(ec);
-            deferred.abort({}, ec, ec.message());
-        } else {
-            deferred.close({});
         }
     }
 };
@@ -642,7 +641,7 @@ private:
 app_t::app_t(context_t& context,
              const std::string& name,
              const std::string& profile,
-             cocaine::deferred<void> deferred):
+             std::function<void(std::future<void> future)> callback):
     loop(std::make_shared<asio::io_service>()),
     work(std::make_unique<asio::io_service::work>(*loop)),
     thread(nullptr)
@@ -651,7 +650,7 @@ app_t::app_t(context_t& context,
         context,
         manifest_t(context, name),
         profile_t(context, profile),
-        deferred,
+        std::move(callback),
         loop
     );
     COCAINE_LOG_DEBUG(state->logger(), "application has initialized its internal state");
