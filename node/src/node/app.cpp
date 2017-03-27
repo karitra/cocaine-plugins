@@ -477,7 +477,8 @@ private:
 } // namespace state
 
 class cocaine::service::node::app_state_t
-    : public std::enable_shared_from_this<cocaine::service::node::app_state_t> {
+    : public std::enable_shared_from_this<cocaine::service::node::app_state_t>
+{
 
     const std::unique_ptr<logging::logger_t> log;
 
@@ -577,8 +578,6 @@ private:
         on_abort(const std::error_code& ec, const std::string& reason) {
             const auto p = parent.lock();
             if (!p) {
-                // TODO: should we inform RT (or logger) that there was nothing to abort?
-                // throw?
                 return;
             }
             COCAINE_LOG_ERROR(p->log, "unable to spool app, [{}] {} - {}", ec.value(), ec.message(), reason);
@@ -594,8 +593,6 @@ private:
         on_ready() {
             const auto p = parent.lock();
             if (!p) {
-                // TODO: should we inform RT (or logger) that application was never cast alive?
-                // Throw?
                 return;
             }
 
@@ -603,7 +600,7 @@ private:
             p->loop->dispatch(std::bind(&app_state_t::publish, p));
         }
 
-        spool_handle_t(std::shared_ptr<app_state_t> _parent) :
+        spool_handle_t(const std::shared_ptr<app_state_t>& _parent) :
             parent(move(_parent))
         {}
 
