@@ -601,7 +601,7 @@ private:
         }
 
         spool_handle_t(const std::shared_ptr<app_state_t>& _parent) :
-            parent(move(_parent))
+            parent(_parent)
         {}
 
         // It seems that spool_handle_t could survive somewhere inside isolation
