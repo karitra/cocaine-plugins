@@ -9,11 +9,19 @@
 
 #include <metrics/registry.hpp>
 
+#include <cocaine/format.hpp>
 #include <cocaine/context.hpp>
 #include <cocaine/logging.hpp>
+#include <cocaine/repository.hpp>
+
+#include <metrics/factory.hpp>
+#include <metrics/registry.hpp>
 
 #include "cocaine/api/authentication.hpp"
+#include "cocaine/api/isolate.hpp"
 #include "cocaine/api/stream.hpp"
+
+#include "cocaine/repository/isolate.hpp"
 
 #include "cocaine/service/node/manifest.hpp"
 #include "cocaine/service/node/profile.hpp"
@@ -38,6 +46,25 @@ namespace service {
 namespace node {
 
 namespace ph = std::placeholders;
+
+struct collector_t {
+    std::size_t active;
+    std::size_t cumload;
+
+    explicit
+    collector_t(const engine_t::pool_type& pool):
+        active{},
+        cumload{}
+    {
+        for (const auto& it : pool) {
+            const auto load = it.second.load();
+            if (it.second.active() && load) {
+                active++;
+                cumload += load;
+            }
+        }
+    }
+};
 
 engine_t::engine_t(context_t& context,
                    manifest_t manifest,
@@ -296,6 +323,9 @@ auto engine_t::assign(slave_t& slave, load_t& load) -> void {
 }
 
 auto engine_t::despawn(const std::string& id, despawn_policy_t policy) -> void {
+
+    metrics_retriever_impl->add_post_mortem(id);
+
     pool.apply([&](pool_type& pool) {
         auto it = pool.find(id);
         if (it != pool.end()) {
@@ -385,6 +415,8 @@ auto engine_t::on_slave_death(const std::error_code& ec, std::string uuid) -> vo
     } else {
         COCAINE_LOG_DEBUG(log, "slave has removed itself from the pool");
     }
+
+    metrics_retriever_impl->add_post_mortem(uuid);
 
     pool.apply([&](pool_type& pool) {
         auto it = pool.find(uuid);

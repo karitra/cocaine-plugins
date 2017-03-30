@@ -35,6 +35,7 @@ struct isolate_spawned_tag;
 struct isolate_spooled_tag;
 
 struct isolate {
+
     struct spool {
         typedef isolate_tag tag;
 
@@ -80,6 +81,21 @@ struct isolate {
         >::tag upstream_type;
     };
 
+    struct metrics {
+        typedef isolate_tag tag;
+
+        static const char* alias() {
+            return "metrics";
+        }
+
+        typedef boost::mpl::list<
+            dynamic_t
+        > argument_type;
+
+        typedef option_of<
+            dynamic_t
+        >::tag upstream_type;
+    };
 };
 
 struct isolate_spawned {
@@ -106,13 +122,15 @@ struct isolate_spooled {
 
 template<>
 struct protocol<isolate_tag> {
+
     typedef boost::mpl::int_<
         1
     >::type version;
 
     typedef mpl::list<
         isolate::spool,
-        isolate::spawn
+        isolate::spawn,
+        isolate::metrics
     > messages;
 
     typedef isolate scope;

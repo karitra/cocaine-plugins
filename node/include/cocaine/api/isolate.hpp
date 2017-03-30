@@ -91,6 +91,19 @@ struct spawn_handle_base_t {
     on_data(const std::string& data) = 0;
 };
 
+struct metrics_handle_base_t {
+    virtual
+    ~metrics_handle_base_t() {}
+
+    virtual
+    void
+    on_data(const dynamic_t& data) = 0;
+
+    virtual
+    void
+    on_error(const std::error_code& ec, const std::string& msg) = 0;
+};
+
 typedef std::map<std::string, std::string> args_t;
 typedef std::map<std::string, std::string> env_t;
 
@@ -110,6 +123,10 @@ struct isolate_t {
     std::unique_ptr<cancellation_t>
     spawn(const std::string& path, const args_t& args, const env_t& environment,
                 std::shared_ptr<api::spawn_handle_base_t> handle) = 0;
+
+    virtual
+    void
+    metrics(const dynamic_t& query, std::shared_ptr<api::metrics_handle_base_t> handle) const = 0;
 
     asio::io_service&
     get_io_service() {

@@ -73,6 +73,9 @@ public:
     /// Statistics.
     stats_t stats;
 
+    class metrics_retriever_t;
+    std::shared_ptr<metrics_retriever_t> metrics_retriever_impl;
+
 public:
     engine_t(context_t& context,
              manifest_t manifest,
