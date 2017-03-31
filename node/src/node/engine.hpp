@@ -73,9 +73,10 @@ public:
     /// Statistics.
     stats_t stats;
 
-    class metrics_retriever_t;
+    /// Active isolation workers metrics sampler
+    /// poll sequence should be initialized explicitly with
+    /// metrics_retriever_t::ignite_poll method
     std::shared_ptr<metrics_retriever_t> metrics_retriever_impl;
-
 public:
     engine_t(context_t& context,
              manifest_t manifest,

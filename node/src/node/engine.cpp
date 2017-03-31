@@ -7,8 +7,6 @@
 #include <blackhole/logger.hpp>
 #include <blackhole/scope/holder.hpp>
 
-#include <metrics/registry.hpp>
-
 #include <cocaine/format.hpp>
 #include <cocaine/context.hpp>
 #include <cocaine/logging.hpp>
@@ -32,6 +30,8 @@
 #include "cocaine/detail/service/node/dispatch/handshake.hpp"
 #include "cocaine/detail/service/node/dispatch/worker.hpp"
 #include "cocaine/detail/service/node/slave/control.hpp"
+#include "cocaine/detail/service/node/slave/stats.hpp"
+#include "cocaine/detail/service/node/isometrics.hpp"
 
 #include "pool_observer.hpp"
 #include "stdext/clamp.hpp"
@@ -84,6 +84,22 @@ engine_t::engine_t(context_t& context,
     observer(observer),
     stats(context, manifest_.name, std::chrono::seconds(2))
 {
+    if (loop) {
+        const auto isolate = context.repository().get<api::isolate_t>(
+                profile.isolate.type,
+                context,
+                *loop,
+                manifest_.name,
+                profile.isolate.type,
+                profile.isolate.args);
+
+        if (isolate) {
+            metrics_retriever_impl =
+                std::make_shared<metrics_retriever_t>(context, manifest_.name, isolate, pool, *loop);
+            metrics_retriever_impl->ignite_poll();
+        }
+    }
+
     COCAINE_LOG_DEBUG(log, "overseer has been initialized");
 }
 

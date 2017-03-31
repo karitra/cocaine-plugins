@@ -97,16 +97,13 @@ struct metrics_dispatch_t :
     typedef io::protocol<io::event_traits<io::isolate::metrics>::upstream_type>::scope protocol;
 
     metrics_dispatch_t(const std::string &name, std::shared_ptr<api::metrics_handle_base_t> handle)
-        : dispatch(name),
-          metrics_handle(std::move(handle))
+        : dispatch(name)
     {
         namespace ph = std::placeholders;
 
-        on<protocol::value>(std::bind(&api::metrics_handle_base_t::on_data, metrics_handle, ph::_1));
-        on<protocol::error>(std::bind(&api::metrics_handle_base_t::on_error, metrics_handle, ph::_1, ph::_2));
+        on<protocol::value>(std::bind(&api::metrics_handle_base_t::on_data, handle, ph::_1));
+        on<protocol::error>(std::bind(&api::metrics_handle_base_t::on_error, handle, ph::_1, ph::_2));
     }
-
-    std::shared_ptr<api::metrics_handle_base_t> metrics_handle;
 };
 
 struct spool_load_t :

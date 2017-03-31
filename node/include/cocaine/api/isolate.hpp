@@ -63,7 +63,7 @@ struct cancellation_wrapper :
 
 struct spool_handle_base_t {
     virtual
-    ~spool_handle_base_t() {}
+    ~spool_handle_base_t() = default;
 
     virtual
     void
@@ -76,7 +76,7 @@ struct spool_handle_base_t {
 
 struct spawn_handle_base_t {
     virtual
-    ~spawn_handle_base_t() {}
+    ~spawn_handle_base_t() = default;
 
     virtual
     void
@@ -93,7 +93,7 @@ struct spawn_handle_base_t {
 
 struct metrics_handle_base_t {
     virtual
-    ~metrics_handle_base_t() {}
+    ~metrics_handle_base_t() = default;
 
     virtual
     void
@@ -111,9 +111,7 @@ struct isolate_t {
     typedef isolate_t category_type;
 
     virtual
-    ~isolate_t() {
-        // Empty.
-    }
+    ~isolate_t() = default;
 
     virtual
     std::unique_ptr<cancellation_t>
@@ -122,11 +120,12 @@ struct isolate_t {
     virtual
     std::unique_ptr<cancellation_t>
     spawn(const std::string& path, const args_t& args, const env_t& environment,
-                std::shared_ptr<api::spawn_handle_base_t> handle) = 0;
+                std::shared_ptr<api::spawn_handle_base_t> handler) = 0;
 
     virtual
     void
-    metrics(const dynamic_t& query, std::shared_ptr<api::metrics_handle_base_t> handle) const = 0;
+    metrics(const dynamic_t& query,
+        std::shared_ptr<api::metrics_handle_base_t> handle) const = 0;
 
     asio::io_service&
     get_io_service() {
