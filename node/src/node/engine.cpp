@@ -69,7 +69,7 @@ struct collector_t {
 engine_t::engine_t(context_t& context,
                    manifest_t manifest,
                    profile_t profile,
-                   pool_observer& observer,
+                   std::shared_ptr<pool_observer> observer,
                    std::shared_ptr<asio::io_service> loop):
     log(context.log(format("{}/overseer", manifest.name))),
     context(context),
@@ -81,9 +81,10 @@ engine_t::engine_t(context_t& context,
     loop(loop),
     pool_target{},
     last_timeout(std::chrono::seconds(1)),
-    observer(observer),
     stats(context, manifest_.name, std::chrono::seconds(2))
 {
+    observers.emplace_back(observer);
+
     if (loop) {
         const auto isolate = context.repository().get<api::isolate_t>(
                 profile.isolate.type,
@@ -95,8 +96,12 @@ engine_t::engine_t(context_t& context,
 
         if (isolate) {
             metrics_retriever_impl =
-                std::make_shared<metrics_retriever_t>(context, manifest_.name, isolate, pool, *loop);
-            metrics_retriever_impl->ignite_poll();
+                metrics_retriever_t::make_and_ignite(
+                    context,
+                    manifest_.name,
+                    isolate, pool,
+                    *loop,
+                    observers);
         }
     }
 
@@ -129,6 +134,236 @@ engine_t::profile() const {
     return *profile_.synchronize();
 }
 
+void
+engine_t::attach_pool_observer(const std::shared_ptr<pool_observer>& observer) {
+    observers.emplace_back(observer);
+}
+
+namespace {
+
+// Helper tagged struct.
+struct queue_t {
+    unsigned long capacity;
+
+    const synchronized<engine_t::queue_type>* queue;
+    metrics::usts::ewma_t& queue_depth;
+};
+
+// Helper tagged struct.
+struct pool_t {
+    unsigned long capacity;
+
+    std::int64_t spawned;
+    std::int64_t crashed;
+
+    const synchronized<engine_t::pool_type>* pool;
+};
+
+class info_visitor_t {
+    const io::node::info::flags_t flags;
+
+    dynamic_t::object_t& result;
+
+public:
+    info_visitor_t(io::node::info::flags_t flags, dynamic_t::object_t* result):
+        flags(flags),
+        result(*result)
+    {}
+
+    void
+    visit(const manifest_t& value) {
+        if (flags & io::node::info::expand_manifest) {
+            result["manifest"] = value.object();
+        }
+    }
+
+    void
+    visit(const profile_t& value) {
+        dynamic_t::object_t info;
+
+        // Useful when you want to edit the profile.
+        info["name"] = value.name;
+
+        if (flags & io::node::info::expand_profile) {
+            info["data"] = value.object();
+        }
+
+        result["profile"] = info;
+    }
+
+    // Incoming requests.
+    void
+    visit(std::int64_t accepted, std::int64_t rejected) {
+        dynamic_t::object_t info;
+
+        info["accepted"] = accepted;
+        info["rejected"] = rejected;
+
+        result["requests"] = info;
+    }
+
+    // Pending events queue.
+    void
+    visit(const queue_t& value) {
+        dynamic_t::object_t info;
+
+        info["capacity"] = value.capacity;
+
+        const auto now = std::chrono::high_resolution_clock::now();
+
+        value.queue->apply([&](const engine_t::queue_type& queue) {
+            info["depth"] = queue.size();
+
+            // Wake up aggregator.
+            value.queue_depth.add(queue.size());
+            info["depth_average"] = trunc(value.queue_depth.get(), 3);
+
+            typedef engine_t::queue_type::value_type value_type;
+
+            if (queue.empty()) {
+                info["oldest_event_age"] = 0;
+            } else {
+                const auto min = *boost::min_element(queue |
+                    boost::adaptors::transformed(+[](const value_type& cur) {
+                        return cur.event.birthstamp;
+                    })
+                );
+
+                const auto duration = std::chrono::duration_cast<
+                    std::chrono::milliseconds
+                >(now - min).count();
+
+                info["oldest_event_age"] = duration;
+            }
+        });
+
+        result["queue"] = info;
+    }
+
+    void
+    visit(metrics::meter_t& meter) {
+        dynamic_t::array_t info {{
+            trunc(meter.m01rate(), 3),
+            trunc(meter.m05rate(), 3),
+            trunc(meter.m15rate(), 3)
+        }};
+
+        result["rate"] = info;
+        result["rate_mean"] = trunc(meter.mean_rate(), 3);
+    }
+
+    inline
+    double
+    trunc(double v, uint n) noexcept {
+        BOOST_ASSERT(n < 10);
+
+        static const long long table[10] = {
+            1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000
+        };
+
+        return std::ceil(v * table[n]) / table[n];
+    }
+
+    template<typename Accumulate>
+    void
+    visit(metrics::timer<Accumulate>& timer) {
+        const auto snapshot = timer.snapshot();
+
+        dynamic_t::object_t info;
+
+        info["50.00%"] = trunc(snapshot.median() / 1e6, 3);
+        info["75.00%"] = trunc(snapshot.p75() / 1e6, 3);
+        info["90.00%"] = trunc(snapshot.p90() / 1e6, 3);
+        info["95.00%"] = trunc(snapshot.p95() / 1e6, 3);
+        info["98.00%"] = trunc(snapshot.p98() / 1e6, 3);
+        info["99.00%"] = trunc(snapshot.p99() / 1e6, 3);
+        info["99.95%"] = trunc(snapshot.value(0.9995) / 1e6, 3);
+
+        result["timings"] = info;
+
+        dynamic_t::object_t reversed;
+
+        const auto find = [&](const double ms) -> double {
+            return 100.0 * snapshot.phi(ms);
+        };
+
+        reversed["1ms"]    = trunc(find(1e6), 2);
+        reversed["2ms"]    = trunc(find(2e6), 2);
+        reversed["5ms"]    = trunc(find(5e6), 2);
+        reversed["10ms"]   = trunc(find(10e6), 2);
+        reversed["20ms"]   = trunc(find(20e6), 2);
+        reversed["50ms"]   = trunc(find(50e6), 2);
+        reversed["100ms"]  = trunc(find(100e6), 2);
+        reversed["500ms"]  = trunc(find(500e6), 2);
+        reversed["1000ms"] = trunc(find(1000e6), 2);
+
+        result["timings_reversed"] = reversed;
+    }
+
+    void
+    visit(const pool_t& value) {
+        const auto now = std::chrono::high_resolution_clock::now();
+
+        value.pool->apply([&](const engine_t::pool_type& pool) {
+            collector_t collector(pool);
+
+            // Cumulative load on the app over all the slaves.
+            result["load"] = collector.cumload;
+
+            dynamic_t::object_t slaves;
+            for (const auto& kv : pool) {
+                const auto& name = kv.first;
+                const auto& slave = kv.second;
+
+                const auto stats = slave.stats();
+
+                dynamic_t::object_t stat;
+                stat["accepted"]   = stats.total;
+                stat["load:tx"]    = stats.tx;
+                stat["load:rx"]    = stats.rx;
+                stat["load:total"] = stats.load;
+                stat["state"]      = stats.state;
+                stat["uptime"]     = slave.uptime();
+
+                // NOTE: Collects profile info.
+                const auto profile = slave.profile();
+
+                dynamic_t::object_t profile_info;
+                profile_info["name"] = profile.name;
+                if (flags & io::node::info::expand_profile) {
+                    profile_info["data"] = profile.object();
+                }
+
+                stat["profile"] = profile_info;
+
+                if (stats.age) {
+                    const auto duration = std::chrono::duration_cast<
+                        std::chrono::milliseconds
+                    >(now - *stats.age).count();
+                    stat["oldest_channel_age"] = duration;
+                } else {
+                    stat["oldest_channel_age"] = 0;
+                }
+
+                slaves[name] = stat;
+            }
+
+            dynamic_t::object_t pinfo;
+            pinfo["active"]   = collector.active;
+            pinfo["idle"]     = pool.size() - collector.active;
+            pinfo["capacity"] = value.capacity;
+            pinfo["slaves"]   = slaves;
+            pinfo["total:spawned"] = value.spawned;
+            pinfo["total:crashed"] = value.crashed;
+
+            result["pool"] = pinfo;
+        });
+    }
+};
+
+} // namespace
+
+>>>>>>> wip: pool observers list; metrics_retriever_t make and init sequence; add isometrics.cpp to build list
 auto engine_t::info(io::node::info::flags_t flags) const -> dynamic_t::object_t {
     dynamic_t::object_t result;
 
@@ -340,7 +575,7 @@ auto engine_t::assign(slave_t& slave, load_t& load) -> void {
 
 auto engine_t::despawn(const std::string& id, despawn_policy_t policy) -> void {
 
-    metrics_retriever_impl->add_post_mortem(id);
+    auto was_despawned = false;
 
     pool.apply([&](pool_type& pool) {
         auto it = pool.find(id);
@@ -351,7 +586,7 @@ auto engine_t::despawn(const std::string& id, despawn_policy_t policy) -> void {
                 break;
             case despawn_policy_t::force:
                 pool.erase(it);
-                observer.despawned();
+                was_despawned = true;
                 loop->post(std::bind(&engine_t::rebalance_slaves, shared_from_this()));
                 break;
             default:
@@ -359,6 +594,12 @@ auto engine_t::despawn(const std::string& id, despawn_policy_t policy) -> void {
             }
         }
     });
+
+    if (was_despawned) {
+        boost::for_each(observers, [&] (const std::shared_ptr<pool_observer> &o) {
+            o->despawned_with_id(id);
+        });
+    }
 }
 
 auto engine_t::on_handshake(const std::string& id, std::shared_ptr<session_t> session, upstream<io::worker::control_tag>&& stream)
@@ -391,10 +632,13 @@ auto engine_t::on_handshake(const std::string& id, std::shared_ptr<session_t> se
     });
 
     if (control) {
-        observer.spawned();
         auto self = shared_from_this();
         loop->post([&, self] {
             rebalance_events();
+        });
+
+        boost::for_each(observers, [](const std::shared_ptr<pool_observer> &o) {
+            o->spawned();
         });
     }
 
@@ -432,8 +676,6 @@ auto engine_t::on_slave_death(const std::error_code& ec, std::string uuid) -> vo
         COCAINE_LOG_DEBUG(log, "slave has removed itself from the pool");
     }
 
-    metrics_retriever_impl->add_post_mortem(uuid);
-
     pool.apply([&](pool_type& pool) {
         auto it = pool.find(uuid);
         if (it != pool.end()) {
@@ -442,7 +684,10 @@ auto engine_t::on_slave_death(const std::error_code& ec, std::string uuid) -> vo
         }
     });
 
-    observer.despawned();
+    boost::for_each(observers, [&] (const std::shared_ptr<pool_observer> &o) {
+        o->despawned_with_id(uuid);
+    });
+
     loop->post(std::bind(&engine_t::rebalance_slaves, shared_from_this()));
 }
 

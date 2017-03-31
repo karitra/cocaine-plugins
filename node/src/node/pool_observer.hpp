@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 namespace cocaine {
 namespace service {
 namespace node {
@@ -17,6 +19,13 @@ public:
     virtual
     auto
     despawned() -> void = 0;
+
+    virtual
+    auto
+    despawned_with_id(const std::string& /* id */) -> void
+    {
+        despawned();
+    }
 };
 
 } // namespace node

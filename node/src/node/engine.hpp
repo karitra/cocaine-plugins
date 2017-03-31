@@ -65,7 +65,7 @@ public:
     std::chrono::system_clock::time_point last_failed;
     std::chrono::seconds last_timeout;
 
-    pool_observer& observer;
+    std::vector<std::shared_ptr<pool_observer>> observers;
 
     /// Pending queue.
     synchronized<queue_type> queue;
@@ -81,7 +81,7 @@ public:
     engine_t(context_t& context,
              manifest_t manifest,
              profile_t profile,
-             pool_observer& observer,
+             std::shared_ptr<pool_observer> observer,
              std::shared_ptr<asio::io_service> loop);
 
     ~engine_t();
@@ -154,6 +154,7 @@ public:
     /// Cancels all asynchronous pending operations, preparing for destruction.
     auto cancel() -> void;
 
+    auto attach_pool_observer(const std::shared_ptr<pool_observer>& observer) -> void;
 private:
     /// Spawns a slave using current manifest and profile.
     auto spawn(pool_type& pool) -> void;
