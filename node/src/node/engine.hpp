@@ -65,7 +65,8 @@ public:
     std::chrono::system_clock::time_point last_failed;
     std::chrono::seconds last_timeout;
 
-    std::vector<std::shared_ptr<pool_observer>> observers;
+    using observers_type = std::vector<std::shared_ptr<pool_observer>>;
+    synchronized<observers_type> observers;
 
     /// Pending queue.
     synchronized<queue_type> queue;
@@ -73,9 +74,10 @@ public:
     /// Statistics.
     stats_t stats;
 
-    /// Active isolation workers metrics sampler
-    /// poll sequence should be initialized explicitly with
-    /// metrics_retriever_t::ignite_poll method
+    /// Isolation daemon's workers metrics sampler.
+    /// Poll sequence should be initialized explicitly with
+    /// metrics_retriever_t::ignite_poll method or implicitly
+    /// within metrics_retriever_t::make_and_ignite.
     std::shared_ptr<metrics_retriever_t> metrics_retriever_impl;
 public:
     engine_t(context_t& context,

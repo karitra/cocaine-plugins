@@ -125,7 +125,7 @@ struct isolate_t {
     virtual
     void
     metrics(const dynamic_t& query,
-        std::shared_ptr<api::metrics_handle_base_t> handle) const = 0;
+        std::shared_ptr<api::metrics_handle_base_t> handler) const = 0;
 
     asio::io_service&
     get_io_service() {

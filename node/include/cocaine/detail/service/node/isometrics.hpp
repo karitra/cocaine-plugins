@@ -29,22 +29,13 @@ namespace detail {
 namespace service {
 namespace node {
 
+struct metrics_aggregate_proxy_t;
+
 struct worker_metrics_t {
-    // running times
-    metrics::shared_metric<std::atomic<std::uint64_t>> uptime;
-    metrics::shared_metric<std::atomic<std::uint64_t>> user_time;
-    metrics::shared_metric<std::atomic<std::uint64_t>> sys_time;
+    using shared_counter_type = metrics::shared_metric<std::atomic<std::uint64_t>>;
 
-    // memory usage (in bytes)
-    metrics::shared_metric<std::atomic<std::uint64_t>> vms;
-    metrics::shared_metric<std::atomic<std::uint64_t>> rss;
-
-    // disk io (in bytes)
-    metrics::shared_metric<std::atomic<std::uint64_t>> ioread;
-    metrics::shared_metric<std::atomic<std::uint64_t>> iowrite;
-
-    // threads stats
-    metrics::shared_metric<std::atomic<std::uint64_t>> threads_count;
+    using counters_table_type = std::unordered_map<std::string, shared_counter_type>;
+    counters_table_type common_counters;
 
     //
     // TODO: more to come
@@ -52,8 +43,26 @@ struct worker_metrics_t {
 
     worker_metrics_t(context_t& ctx, const std::string& name_prefix);
     worker_metrics_t(context_t& ctx, const std::string& app_name, const std::string& id);
+
+    friend auto
+    operator+(worker_metrics_t& src, metrics_aggregate_proxy_t& proxy) -> metrics_aggregate_proxy_t&;
+
+    auto
+    operator=(metrics_aggregate_proxy_t&& init) -> worker_metrics_t&;
 };
 
+struct metrics_aggregate_proxy_t {
+    std::unordered_map<std::string, std::uint64_t> common_counters;
+
+    auto
+    operator+(const worker_metrics_t& worker_metrics) -> metrics_aggregate_proxy_t&;
+};
+
+/// Isolation daemon's workers metrics sampler.
+///
+/// Poll sequence should be initialized explicitly with
+/// metrics_retriever_t::ignite_poll method or implicitly
+/// within metrics_retriever_t::make_and_ignite.
 class metrics_retriever_t :
     public std::enable_shared_from_this<metrics_retriever_t>
 {
@@ -81,12 +90,14 @@ private:
     using purgatory_pot_type = std::set<std::string>;
     synchronized<purgatory_pot_type> purgatory;
 
+    // `synchronized` not needed within current design, but shouldn't do any harm
     // <uuid, metrics>
     synchronized<stats_table_type> metrics;
 
     struct self_metrics_t {
         metrics::shared_metric<std::atomic<std::uint64_t>> uuid_requested;
         metrics::shared_metric<std::atomic<std::uint64_t>> uuid_recieved;
+        metrics::shared_metric<std::atomic<std::uint64_t>> requests_send;
         metrics::shared_metric<std::atomic<std::uint64_t>> receive_errors;
         metrics::shared_metric<std::atomic<std::uint64_t>> posmortem_queue_size;
 
@@ -114,7 +125,8 @@ public:
         const std::string& name,
         std::shared_ptr<api::isolate_t> isolate,
         synchronized<engine_t::pool_type>& pool,
-        asio::io_service& loop, Observers& observers) -> std::shared_ptr<metrics_retriever_t>;
+        asio::io_service& loop,
+        Observers& observers) -> std::shared_ptr<metrics_retriever_t>;
 
     auto
     ignite_poll() -> void;
@@ -163,14 +175,17 @@ private:
             parent(p)
         {}
 
+        virtual
         auto
         spawned() -> void override {}
 
+        virtual
         auto
         despawned() -> void override {}
 
+        virtual
         auto
-        despawned_with_id(const std::string& id) -> void override {
+        despawned(const std::string& id) -> void override {
             parent.add_post_mortem(id);
         }
 
@@ -179,6 +194,23 @@ private:
     };
 
 }; // metrics_retriever_t
+
+template<typename Observers>
+auto
+metrics_retriever_t::make_and_ignite(
+    context_t& ctx,
+    const std::string& name,
+    std::shared_ptr<api::isolate_t> isolate,
+    synchronized<engine_t::pool_type>& pool,
+    asio::io_service& loop, Observers& observers) -> std::shared_ptr<metrics_retriever_t>
+{
+    auto retriever = std::make_shared<metrics_retriever_t>(ctx, name, std::move(isolate), pool, loop);
+
+    observers->emplace_back(retriever->make_observer());
+    retriever->ignite_poll();
+
+    return retriever;
+}
 
 }  // namespace node
 }  // namespace service

@@ -22,7 +22,7 @@ public:
 
     virtual
     auto
-    despawned_with_id(const std::string& /* id */) -> void
+    despawned(const std::string& /* id */) -> void
     {
         despawned();
     }

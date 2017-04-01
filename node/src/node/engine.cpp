@@ -83,7 +83,7 @@ engine_t::engine_t(context_t& context,
     last_timeout(std::chrono::seconds(1)),
     stats(context, manifest_.name, std::chrono::seconds(2))
 {
-    observers.emplace_back(observer);
+    observers->emplace_back(observer);
 
     if (loop) {
         const auto isolate = context.repository().get<api::isolate_t>(
@@ -99,7 +99,8 @@ engine_t::engine_t(context_t& context,
                 metrics_retriever_t::make_and_ignite(
                     context,
                     manifest_.name,
-                    isolate, pool,
+                    isolate,
+                    pool,
                     *loop,
                     observers);
         }
@@ -136,7 +137,7 @@ engine_t::profile() const {
 
 void
 engine_t::attach_pool_observer(const std::shared_ptr<pool_observer>& observer) {
-    observers.emplace_back(observer);
+    observers->emplace_back(observer);
 }
 
 namespace {
@@ -596,8 +597,10 @@ auto engine_t::despawn(const std::string& id, despawn_policy_t policy) -> void {
     });
 
     if (was_despawned) {
-        boost::for_each(observers, [&] (const std::shared_ptr<pool_observer> &o) {
-            o->despawned_with_id(id);
+        observers.apply([&](const observers_type &observers) {
+            boost::for_each(observers, [&] (const std::shared_ptr<pool_observer> &o) {
+                o->despawned(id);
+            });
         });
     }
 }
@@ -637,8 +640,10 @@ auto engine_t::on_handshake(const std::string& id, std::shared_ptr<session_t> se
             rebalance_events();
         });
 
-        boost::for_each(observers, [](const std::shared_ptr<pool_observer> &o) {
-            o->spawned();
+        observers.apply([&](const observers_type &observers) {
+            boost::for_each(observers, [](const std::shared_ptr<pool_observer> &o) {
+                o->spawned();
+            });
         });
     }
 
@@ -684,8 +689,10 @@ auto engine_t::on_slave_death(const std::error_code& ec, std::string uuid) -> vo
         }
     });
 
-    boost::for_each(observers, [&] (const std::shared_ptr<pool_observer> &o) {
-        o->despawned_with_id(uuid);
+    observers.apply([&](const observers_type &observers) {
+        boost::for_each(observers, [&](const std::shared_ptr<pool_observer> &o) {
+            o->despawned(uuid);
+        });
     });
 
     loop->post(std::bind(&engine_t::rebalance_slaves, shared_from_this()));

@@ -471,6 +471,8 @@ private:
     }
 
     struct observer_adapter_t : public pool_observer {
+        using pool_observer::despawned;
+
         observer_adapter_t(running_t &rstate) :
             parent(rstate)
         {}
