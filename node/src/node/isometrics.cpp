@@ -5,6 +5,7 @@
 
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm.hpp>
+#include <boost/range/numeric.hpp>
 
 #include <boost/utility/string_ref.hpp>
 
@@ -85,7 +86,6 @@ worker_metrics_t::operator=(metrics_aggregate_proxy_t&& proxy) -> worker_metrics
     return *this;
 }
 
-
 // TODO: hardly WIP
 struct response_processor_t {
     using stats_table_type = metrics_retriever_t::stats_table_type;
@@ -128,17 +128,18 @@ struct response_processor_t {
                     continue;
                 }
 
+                auto stat_it = stats_table.find(uuid);
+                if (stat_it == std::end(stats_table)) {
+                    tie(stat_it, std::ignore) = stats_table.emplace(uuid, worker_metrics_t{ctx, app_name, uuid});
+                }
+
                 auto common_it = metrics.find("common");
                 if (common_it == std::end(metrics)) {
                     continue;
                 }
 
-                auto victim = stats_table.find(uuid);
-                if (victim == std::end(stats_table)) {
-                    tie(victim, std::ignore) = stats_table.emplace(uuid, worker_metrics_t{ctx, app_name, uuid});
-                }
+                fill_metrics(common_it->second.as_object(), stat_it->second.common_counters);
 
-                fill_metrics(common_it->second.as_object(), victim->second.common_counters);
                 ++uuids_processed;
             }
         }
@@ -177,6 +178,7 @@ private:
 
             const auto pos = name.find('.');
             if (pos == boost::string_ref::npos) {
+                // protocol error: ingore silently
                 continue;
             }
 
@@ -184,6 +186,7 @@ private:
             const auto type = name.substr(pos+1);
 
             if (nm.empty() || type.empty()) {
+                // protocol error: ingore silently
                 continue;
             }
 
@@ -323,6 +326,27 @@ metrics_retriever_t::poll_metrics(const std::error_code& ec) -> void {
     query["uuids"] = query_array;
     isolate->metrics(query, std::make_shared<metrics_handle_t>(shared_from_this()));
 
+    // At this point query is posted and we have gathered uuids of available
+    // (alived, pooled) workers and dead recently workers, so we can clear
+    // stat_table out of garbage `neither alive nor dead` uuids
+    stats_table_type preserved_metrics;
+    preserved_metrics.reserve(metrics->size());
+
+    metrics.apply([&](stats_table_type &table) {
+        for(const auto to_preserve : query_array) {
+            const auto it = table.find(to_preserve.as_string());
+            if (it == std::end(table)) {
+                continue;
+            }
+
+            preserved_metrics.emplace(std::move(*it));
+        }
+
+        table.clear();
+        table.swap(preserved_metrics);
+    });
+
+    // Update self stat
     self_metrics.uuid_requested->fetch_add(query_array.size());
     self_metrics.requests_send->fetch_add(1);
 
@@ -338,6 +362,8 @@ metrics_retriever_t::make_observer() -> std::shared_ptr<pool_observer> {
 
 auto
 metrics_retriever_t::metrics_handle_t::on_data(const dynamic_t& data) -> void {
+    using namespace boost::adaptors;
+
     assert(parent);
 
     std::cerr << "metrics_handle_t:::on_data TBD\n";
@@ -345,13 +371,19 @@ metrics_retriever_t::metrics_handle_t::on_data(const dynamic_t& data) -> void {
 
     // should not harm performance, as this handler would be called from same
     // poll loop, within same thread on each poll iteration
-    parent->metrics.apply([&](metrics_retriever_t::stats_table_type& table) {
+    const auto processed_count = parent->metrics.apply([&](metrics_retriever_t::stats_table_type& table) {
         response_processor_t processor(parent->app_name);
-        processor(parent->context, data, table);
+
+        // fill worker current `slice` metrics table
+        const auto processed_count = processor(parent->context, data, table);
+
+        // update application-wide aggregate of metrics
+        parent->app_aggregate_metrics = boost::accumulate( table | map_values, metrics_aggregate_proxy_t());
+
+        return processed_count;
     });
 
-    // TODO
-    parent->self_metrics.uuid_recieved->fetch_add(1);
+    parent->self_metrics.uuid_recieved->fetch_add(processed_count);
 }
 
 auto
