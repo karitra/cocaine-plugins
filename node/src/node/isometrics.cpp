@@ -9,10 +9,12 @@
 
 #include <boost/utility/string_ref.hpp>
 
-#if 1
-#define dbg(msg) std::cerr << (msg) << '\n'
+#if 0
+#define dbg(msg) std::cerr << msg << '\n'
+#define DBG_DUMP_UUIDS(os, logo, container) aux::dump_uuids(os, logo, container)
 #else
 #define dbg(msg)
+#define DBG_DUMP_UUIDS(os, logo, container)
 #endif
 
 namespace cocaine {
@@ -27,41 +29,73 @@ namespace conf {
 
     constexpr auto PURGATORY_QUEUE_BOUND = 8 * 1024;
 
-    const std::vector<std::string> metrics_names =
+    // <name, should be metric zeroed on empty workers list>
+    const std::vector<std::pair<std::string, bool>> metrics_names =
     {
         // yet abstract cpu load measurement
-        "cpu",
+        { "cpu", true},
 
         // running times
-        "uptime",
-        "user_time",
-        "sys_time",
+        { "uptime",    true },
+        { "user_time", true },
+        { "sys_time",  true },
 
         // memory usage (in bytes)
-        "vms",
-        "rss",
+        { "vms", true },
+        { "rss", true },
 
         // disk io (in bytes)
-        "ioread",
-        "iowrite",
+        { "ioread",  false },
+        { "iowrite", false },
 
         // threads stats
-        "threads_count"
+        // "threads_count"
     };
+}
+
+namespace aux {
+
+    template<typename Val>
+    auto
+    uuid_value(const Val& v) -> std::string;
+
+    template<>
+    auto
+    uuid_value<std::string>(const std::string& v) -> std::string {
+        return v;
+    }
+
+    template<>
+    auto
+    uuid_value<dynamic_t>(const dynamic_t& arr) -> std::string {
+        return arr.as_string();
+    }
+
+    template<typename Container>
+    auto
+    dump_uuids(std::ostream& os, const std::string& logo, const Container& arr) -> void {
+        os << logo << " size " << arr.size() << '\n';
+        for(const auto& uuid : arr) {
+            std::cerr << "\tuuid: " << uuid_value(uuid) << '\n';
+        }
+    }
 }
 
 auto
 metrics_aggregate_proxy_t::operator+(const worker_metrics_t& worker_metrics) -> metrics_aggregate_proxy_t&
 {
-    for(const auto& name : conf::metrics_names) {
+    using boost::adaptors::map_keys;
 
-        auto self_it = common_counters.find(name);
-        const auto worker_it = worker_metrics.common_counters.find(name);
+    dbg("worker_metrics_t::operator+() summing to proxy");
 
-        if (self_it != std::end(common_counters) && worker_it != std::end(worker_metrics.common_counters) ) {
-            self_it->second += worker_it->second->load();
+    boost::for_each(worker_metrics.common_counters | map_keys, [&] (const std::string &name) {
+        const auto& counters = worker_metrics.common_counters;
+
+        const auto it = counters.find(name);
+        if (it != std::end(counters)) {
+            this->common_counters[name] += it->second->load();
         }
-    }
+    });
 
     return *this;
 }
@@ -74,19 +108,38 @@ operator+(worker_metrics_t& src, metrics_aggregate_proxy_t& proxy) -> metrics_ag
 
 auto
 worker_metrics_t::operator=(metrics_aggregate_proxy_t&& proxy) -> worker_metrics_t& {
-    for(const auto& name : conf::metrics_names) {
-        auto self_it = this->common_counters.find(name);
-        const auto proxy_it = proxy.common_counters.find(name);
 
-        if (self_it != std::end(this->common_counters) && proxy_it != std::end(proxy.common_counters) ) {
-            self_it->second->store(proxy_it->second);
+    dbg("worker_metrics_t::operator=() moving from proxy");
+
+    if (proxy.common_counters.empty()) {
+        // no active workers, zero out some metrics values
+        for(const auto& metrics : conf::metrics_names) {
+            const auto& name = metrics.first;
+            const auto& must_be_zeroed = metrics.second;
+
+            dbg("should be zeroed " << name << ", must_be_zeroed " << must_be_zeroed);
+
+            auto it = this->common_counters.find(name);
+            if (it != std::end(this->common_counters) && must_be_zeroed) {
+                    it->second->store(0);
+            }
+        }
+    } else {
+        for(const auto& metrics : proxy.common_counters) {
+            const auto& name = metrics.first;
+            const auto& value = metrics.second;
+
+            auto self_it = this->common_counters.find(name);
+            if (self_it != std::end(this->common_counters)) {
+                self_it->second->store(value);
+            }
         }
     }
+
 
     return *this;
 }
 
-// TODO: hardly WIP
 struct response_processor_t {
     using stats_table_type = metrics_retriever_t::stats_table_type;
 
@@ -111,12 +164,15 @@ struct response_processor_t {
 
         auto uuids_processed = size_t{};
 
-        // strictly, we should have one app at all within current protocol
         for(const auto& app : apps) {
 
-            if (app_name != app.first) {
-                continue;
-            }
+            // TODO: restore app_name check
+            //
+            // strictly, we should have one app at all within current protocol
+            // if (app_name != app.first) {
+            //     dbg("JSON app is " << app.first);
+            //     continue;
+            // }
 
             const auto uuids = app.second.as_object();
 
@@ -125,18 +181,27 @@ struct response_processor_t {
                 const auto& metrics = item.second.as_object();
 
                 if (uuid.empty()) {
+                    dbg("[response] uuid value is empty");
                     continue;
                 }
 
                 auto stat_it = stats_table.find(uuid);
                 if (stat_it == std::end(stats_table)) {
+                    dbg("[response] inserting new metrics record with uuid" << uuid);
                     tie(stat_it, std::ignore) = stats_table.emplace(uuid, worker_metrics_t{ctx, app_name, uuid});
                 }
 
                 auto common_it = metrics.find("common");
                 if (common_it == std::end(metrics)) {
+                    dbg("[response] no `common` secion");
                     continue;
                 }
+
+#if 0
+                for(const auto& el : common_it->second.as_object()) {
+                    dbg("[response] metric name " << el.first);
+                }
+#endif
 
                 fill_metrics(common_it->second.as_object(), stat_it->second.common_counters);
 
@@ -176,25 +241,34 @@ private:
         for(const auto& metric : metrics) {
             const auto& name = metric.first;
 
+            dbg("[response] metrics name: " << name);
+
             const auto pos = name.find('.');
-            if (pos == boost::string_ref::npos) {
+            const auto nm = name.substr(0, pos);
+
+            if (nm.empty()) {
                 // protocol error: ingore silently
+                // type not checked (for now)
                 continue;
             }
 
-            const auto nm   = name.substr(0, pos);
-            const auto type = name.substr(pos+1);
+            try {
 
-            if (nm.empty() || type.empty()) {
-                // protocol error: ingore silently
+                auto r = result.find(nm);
+                if (r != std::end(result)) {
+                    dbg("[response] found metrics record for " << nm << ", updating");
+                    r->second->store(metric.second.as_uint());
+                }
+
+            // note: boost::bad_get in current implementaion
+            } catch (const std::exception &e) {
+                dbg("[response] parsing exception: " << e.what());
                 continue;
             }
 
-            auto r = result.find(nm);
-            if (r != std::end(result)) {
-                r->second->store(metric.second.as_double());
-            }
-        }
+        } // for each metric
+
+        dbg("[response] fill_metrics done");
     }
 
 private:
@@ -207,20 +281,21 @@ private:
 
 worker_metrics_t::worker_metrics_t(context_t& ctx, const std::string& name_prefix)
 {
-    for(const auto &name : conf::metrics_names) {
+    for(const auto& metric_name : conf::metrics_names) {
+        const auto& name = metric_name.first;
         common_counters.emplace(name, ctx.metrics_hub().counter<std::uint64_t>(cocaine::format("{}.{}", name_prefix, name)));
     }
 }
 
 worker_metrics_t::worker_metrics_t(context_t& ctx, const std::string& app_name, const std::string& id) :
-    worker_metrics_t(ctx, cocaine::format("{}.{}", app_name, id))
+    worker_metrics_t(ctx, cocaine::format("{}.isolate.{}", app_name, id))
 {}
 
 metrics_retriever_t::self_metrics_t::self_metrics_t(context_t& ctx, const std::string& name) :
    uuid_requested{ctx.metrics_hub().counter<std::uint64_t>(cocaine::format("{}.uuid_requested", name))},
    uuid_recieved{ctx.metrics_hub().counter<std::uint64_t>(cocaine::format("{}.uuid_recieved", name))},
    requests_send{ctx.metrics_hub().counter<std::uint64_t>(cocaine::format("{}.requests", name))},
-   receive_errors{ctx.metrics_hub().counter<std::uint64_t>(cocaine::format("{}.errors.count", name))},
+   receive_errors{ctx.metrics_hub().counter<std::uint64_t>(cocaine::format("{}.recieve.errors", name))},
    posmortem_queue_size{ctx.metrics_hub().counter<std::uint64_t>(cocaine::format("{}.postmortem.queue.size", name))}
 {}
 
@@ -235,9 +310,9 @@ metrics_retriever_t::metrics_retriever_t(
         isolate(std::move(isolate)),
         pool(pool),
         log(ctx.log(format("{}/workers_metrics", name))),
-        self_metrics(ctx, cocaine::format("node.metrics.sampler.{}.", name)),
+        self_metrics(ctx, "node.isolate.poll.metrics"),
         app_name(name),
-        app_aggregate_metrics(ctx, name)
+        app_aggregate_metrics(ctx, cocaine::format("{}.isolate", name))
 {
     COCAINE_LOG_INFO(log, "worker metrics retriever has been initialized");
 }
@@ -285,21 +360,11 @@ metrics_retriever_t::poll_metrics(const std::error_code& ec) -> void {
         return alive;
     });
 
-#if 1
-    std::cerr << "metrics.pool.size " << alive_uuids.size() << '\n';
-    for(const auto &el : alive_uuids) {
-        std::cerr << "\tuuid: " << el << '\n';
-    }
-#endif
+    DBG_DUMP_UUIDS(std::cerr, "metrics.pool", alive_uuids);
 
-#if 1
-    std::cerr << "purgatory.pot.size " << purgatory->size() << '\n';
     purgatory.apply([&](const purgatory_pot_type &pot) {
-        for(const auto &sinner : pot) {
-            std::cerr << "\tuuid: " << sinner << '\n';
-        }
+        DBG_DUMP_UUIDS(std::cerr, "purgatory", pot);
     });
-#endif
 
     dynamic_t::array_t query_array;
     query_array.reserve(alive_uuids.size() + purgatory->size());
@@ -315,12 +380,7 @@ metrics_retriever_t::poll_metrics(const std::error_code& ec) -> void {
         pot.clear();
     });
 
-#if 1
-    std::cerr << "query array size: " << query_array.size() << '\n';
-    for(const auto& el : query_array) {
-        std::cerr << "\tuuid: " << el.as_string() << '\n';
-    }
-#endif
+    DBG_DUMP_UUIDS(std::cerr, "query array", query_array);
 
     dynamic_t::object_t query;
     query["uuids"] = query_array;
@@ -332,14 +392,13 @@ metrics_retriever_t::poll_metrics(const std::error_code& ec) -> void {
     stats_table_type preserved_metrics;
     preserved_metrics.reserve(metrics->size());
 
-    metrics.apply([&](stats_table_type &table) {
+    metrics.apply([&](stats_table_type& table) {
         for(const auto to_preserve : query_array) {
             const auto it = table.find(to_preserve.as_string());
-            if (it == std::end(table)) {
-                continue;
-            }
 
-            preserved_metrics.emplace(std::move(*it));
+            if (it != std::end(table)) {
+                preserved_metrics.emplace(std::move(*it));
+            }
         }
 
         table.clear();
@@ -366,8 +425,8 @@ metrics_retriever_t::metrics_handle_t::on_data(const dynamic_t& data) -> void {
 
     assert(parent);
 
-    std::cerr << "metrics_handle_t:::on_data TBD\n";
-    std::cerr << "get json: " << boost::lexical_cast<std::string>(data) << '\n';
+    dbg("metrics_handle_t:::on_data");
+    dbg("[response] get json: " << boost::lexical_cast<std::string>(data) << '\n');
 
     // should not harm performance, as this handler would be called from same
     // poll loop, within same thread on each poll iteration
@@ -389,9 +448,8 @@ metrics_retriever_t::metrics_handle_t::on_data(const dynamic_t& data) -> void {
 auto
 metrics_retriever_t::metrics_handle_t::on_error(const std::error_code&, const std::string& what) -> void {
     assert(parent);
-
-    std::cerr << "metrics_handle_t::on_error: " << what << '\n';
-    // TODO
+    dbg("metrics_handle_t::on_error: " << what);
+    // TODO: start crying?
     parent->self_metrics.receive_errors->fetch_add(1);
 }
 

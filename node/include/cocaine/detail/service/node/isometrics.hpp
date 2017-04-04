@@ -100,14 +100,12 @@ private:
         metrics::shared_metric<std::atomic<std::uint64_t>> requests_send;
         metrics::shared_metric<std::atomic<std::uint64_t>> receive_errors;
         metrics::shared_metric<std::atomic<std::uint64_t>> posmortem_queue_size;
-
         self_metrics_t(context_t& ctx, const std::string& name);
     } self_metrics;
 
     std::string app_name;
 
     worker_metrics_t app_aggregate_metrics;
-
 public:
 
     metrics_retriever_t(
@@ -126,7 +124,7 @@ public:
         std::shared_ptr<api::isolate_t> isolate,
         synchronized<engine_t::pool_type>& pool,
         asio::io_service& loop,
-        Observers& observers) -> std::shared_ptr<metrics_retriever_t>;
+        synchronized<Observers>& observers) -> std::shared_ptr<metrics_retriever_t>;
 
     auto
     ignite_poll() -> void;
@@ -202,7 +200,7 @@ metrics_retriever_t::make_and_ignite(
     const std::string& name,
     std::shared_ptr<api::isolate_t> isolate,
     synchronized<engine_t::pool_type>& pool,
-    asio::io_service& loop, Observers& observers) -> std::shared_ptr<metrics_retriever_t>
+    asio::io_service& loop, synchronized<Observers>& observers) -> std::shared_ptr<metrics_retriever_t>
 {
     auto retriever = std::make_shared<metrics_retriever_t>(ctx, name, std::move(isolate), pool, loop);
 

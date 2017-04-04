@@ -92,6 +92,8 @@ struct isolate {
             dynamic_t
         > argument_type;
 
+        typedef isolate_tag dispatch_type;
+
         typedef option_of<
             dynamic_t
         >::tag upstream_type;
