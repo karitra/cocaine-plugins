@@ -437,6 +437,5 @@ process_t::metrics(const dynamic_t&, std::shared_ptr<api::metrics_handle_base_t>
     COCAINE_LOG_WARNING(m_log, "legacy_process::metrics not implemented");
 }
 
-
 } // namespace isolate
 } // namespace cocaine

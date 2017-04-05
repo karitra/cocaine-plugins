@@ -78,7 +78,7 @@ public:
     /// Poll sequence should be initialized explicitly with
     /// metrics_retriever_t::ignite_poll method or implicitly
     /// within metrics_retriever_t::make_and_ignite.
-    std::shared_ptr<metrics_retriever_t> metrics_retriever_impl;
+    std::shared_ptr<metrics_retriever_t> metrics_retriever;
 public:
     engine_t(context_t& context,
              manifest_t manifest,

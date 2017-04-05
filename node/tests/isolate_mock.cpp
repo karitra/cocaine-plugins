@@ -153,7 +153,7 @@ public:
     boost::optional<std::shared_ptr<dispatch_type>>
     operator()(const std::vector<hpack::header_t>&, tuple_type&& args, upstream_type&& upstream)
     {
-        const auto &query = std::get<0>(args);
+        const auto& query = std::get<0>(args);
         COCAINE_LOG_INFO(log, "metrics. {}", boost::lexical_cast<std::string>(query));
 
         sleep(1);
@@ -172,7 +172,6 @@ public:
                 dynamic_t::object_t metrics;
 
                 const auto total_time = ru.ru_utime.tv_sec + ru.ru_stime.tv_sec;
-
                 const auto cpu = total_time ?
                     ru.ru_utime.tv_sec / total_time * 100 :
                     0;
@@ -215,7 +214,7 @@ public:
         on<io::isolate::spool>(std::make_shared<spool_slot_t>());
         on<io::isolate::spawn>(std::make_shared<spawn_slot_t>());
         on<io::isolate::metrics>(std::make_shared<metrics_slot_t>());
-     }
+    }
 
     virtual
     auto

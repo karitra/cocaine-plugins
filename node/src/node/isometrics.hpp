@@ -2,8 +2,6 @@
 
 #include <memory>
 
-// #include <boost/optional.hpp>
-
 #include <blackhole/logger.hpp>
 #include <blackhole/scope/holder.hpp>
 
@@ -17,29 +15,38 @@
 
 #include "cocaine/api/isolate.hpp"
 
-#include "cocaine/detail/service/node/engine.hpp"
-
 #include <metrics/factory.hpp>
 #include <metrics/registry.hpp>
 
 #include "node/pool_observer.hpp"
+
+#include "engine.hpp"
 
 namespace cocaine {
 namespace detail {
 namespace service {
 namespace node {
 
+namespace conf {
+    constexpr auto METRICS_POLL_INTERVAL = 1u;
+}
+
 struct metrics_aggregate_proxy_t;
 
 struct worker_metrics_t {
-    using shared_counter_type = metrics::shared_metric<std::atomic<std::uint64_t>>;
+    // <not monotonic (instant); shared_metric; delta from prev. value (for monotonic increasing value)>
+    struct counter_metric_t {
+        using value_type = std::uint64_t;
 
-    using counters_table_type = std::unordered_map<std::string, shared_counter_type>;
+        bool is_accumulated; // does isolate returns accumalated value on each request (ioread, etc)
+        metrics::shared_metric<std::atomic<value_type>> value;
+        value_type delta; // if is_accumulated = true then delta = value - prev(value), used for app-wide aggration
+    };
+
+    using counters_table_type = std::unordered_map<std::string, counter_metric_t>;
+    using counters_record_type = counters_table_type::value_type;
+
     counters_table_type common_counters;
-
-    //
-    // TODO: more to come
-    // ...
 
     worker_metrics_t(context_t& ctx, const std::string& name_prefix);
     worker_metrics_t(context_t& ctx, const std::string& app_name, const std::string& id);
@@ -52,7 +59,16 @@ struct worker_metrics_t {
 };
 
 struct metrics_aggregate_proxy_t {
-    std::unordered_map<std::string, std::uint64_t> common_counters;
+    // see worker_metrics_t::counter_metric_t
+    struct counter_metric_t {
+        using value_type = worker_metrics_t::counter_metric_t::value_type;
+        // TODO: union?
+        bool is_accumulated;
+        value_type values; // summation of worker_metrics values
+        value_type deltas; // summation of worker_metrics deltas
+    };
+
+    std::unordered_map<std::string, counter_metric_t> common_counters;
 
     auto
     operator+(const worker_metrics_t& worker_metrics) -> metrics_aggregate_proxy_t&;
@@ -76,7 +92,7 @@ private:
     asio::deadline_timer metrics_poll_timer;
     std::shared_ptr<api::isolate_t> isolate;
 
-    synchronized<engine_t::pool_type> &pool;
+    synchronized<engine_t::pool_type>& pool;
 
     const std::unique_ptr<cocaine::logging::logger_t> log;
 
@@ -98,12 +114,14 @@ private:
         metrics::shared_metric<std::atomic<std::uint64_t>> uuid_requested;
         metrics::shared_metric<std::atomic<std::uint64_t>> uuid_recieved;
         metrics::shared_metric<std::atomic<std::uint64_t>> requests_send;
+        metrics::shared_metric<std::atomic<std::uint64_t>> responses_received;
         metrics::shared_metric<std::atomic<std::uint64_t>> receive_errors;
         metrics::shared_metric<std::atomic<std::uint64_t>> posmortem_queue_size;
         self_metrics_t(context_t& ctx, const std::string& name);
     } self_metrics;
 
     std::string app_name;
+    boost::posix_time::seconds poll_interval;
 
     worker_metrics_t app_aggregate_metrics;
 public:
@@ -113,8 +131,23 @@ public:
         const std::string& name,
         std::shared_ptr<api::isolate_t> isolate,
         synchronized<engine_t::pool_type>& pool,
-        asio::io_service& loop);
+        asio::io_service& loop,
+        const std::uint64_t poll_interval);
 
+    ///
+    /// Reads following section from Cocaine-RT configuration:
+    ///  ```
+    ///  "node" : {
+    ///     ...
+    ///     "args" : {
+    ///        "isolate_metrics:" : true,
+    ///        "isolate_metrics_poll_period_s" : 10
+    ///     }
+    ///  }
+    ///  ```
+    /// if `isolate_metrics` is false (default), returns nullptr,
+    /// and polling sequence wouldn't start.
+    ///
     template<typename Observers>
     static
     auto
@@ -132,7 +165,8 @@ public:
     auto
     make_observer() -> std::shared_ptr<pool_observer>;
 
-    // should be called on every pool::erase(id) invocation
+    //
+    // Should be called on every pool::erase(id) invocation
     //
     // usually isolation daemon will hold metrics of despawned workers for some
     // reasonable period (at least 30 sec), so it is allowed to request metrics
@@ -169,7 +203,7 @@ private:
     // TODO: wip, possibility of redesign
     struct metrics_pool_observer_t : public pool_observer {
 
-        metrics_pool_observer_t(metrics_retriever_t &p) :
+        metrics_pool_observer_t(metrics_retriever_t& p) :
             parent(p)
         {}
 
@@ -188,7 +222,7 @@ private:
         }
 
     private:
-        metrics_retriever_t &parent;
+        metrics_retriever_t& parent;
     };
 
 }; // metrics_retriever_t
@@ -200,14 +234,38 @@ metrics_retriever_t::make_and_ignite(
     const std::string& name,
     std::shared_ptr<api::isolate_t> isolate,
     synchronized<engine_t::pool_type>& pool,
-    asio::io_service& loop, synchronized<Observers>& observers) -> std::shared_ptr<metrics_retriever_t>
+    asio::io_service& loop,
+    synchronized<Observers>& observers) -> std::shared_ptr<metrics_retriever_t>
 {
-    auto retriever = std::make_shared<metrics_retriever_t>(ctx, name, std::move(isolate), pool, loop);
+    const auto node_config = ctx.config().component_group("services").get("node");
 
-    observers->emplace_back(retriever->make_observer());
-    retriever->ignite_poll();
+    if (!node_config) {
+        return nullptr;
+    }
 
-    return retriever;
+    if (isolate) {
+        const auto args = node_config->args().as_object();
+
+        const auto& should_start = args.at("isolate_metrics", false).as_bool();
+        const auto& poll_interval = args.at("isolate_metrics_poll_period_s", conf::METRICS_POLL_INTERVAL).as_uint();
+
+        if (should_start) {
+            auto retriever = std::make_shared<metrics_retriever_t>(
+                ctx,
+                name,
+                std::move(isolate),
+                pool,
+                loop,
+                poll_interval);
+
+                observers->emplace_back(retriever->make_observer());
+                retriever->ignite_poll();
+
+                return retriever;
+        }
+    }
+
+    return nullptr;
 }
 
 }  // namespace node

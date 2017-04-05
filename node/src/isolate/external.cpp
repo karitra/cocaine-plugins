@@ -96,7 +96,7 @@ struct metrics_dispatch_t :
 {
     typedef io::protocol<io::event_traits<io::isolate::metrics>::upstream_type>::scope protocol;
 
-    metrics_dispatch_t(const std::string &name, std::shared_ptr<api::metrics_handle_base_t> handle)
+    metrics_dispatch_t(const std::string& name, std::shared_ptr<api::metrics_handle_base_t> handle)
         : dispatch(name)
     {
         namespace ph = std::placeholders;
@@ -171,14 +171,14 @@ struct spawn_load_t :
 };
 
 struct metrics_load_t {
-    std::weak_ptr<external_t::inner_t> inner;
+    std::shared_ptr<external_t::inner_t> inner;
     std::shared_ptr<api::metrics_handle_base_t> handle;
 
     dynamic_t query;
 
     synchronized<io::upstream_ptr_t> stream;
 
-    metrics_load_t(std::weak_ptr<external_t::inner_t> _inner,
+    metrics_load_t(std::shared_ptr<external_t::inner_t> _inner,
                    const dynamic_t& _query,
                    std::shared_ptr<api::metrics_handle_base_t> _handle
     ) :
@@ -398,11 +398,7 @@ spawn_load_t::apply() {
 
 void
 metrics_load_t::apply() {
-    auto _inner = inner.lock();
-    if (!_inner) {
-        return;
-    }
-
+    auto _inner = inner;
     stream.apply([&](decltype(stream.unsafe())& stream){
         try {
             stream = _inner->session->fork(std::make_shared<metrics_dispatch_t>("external_metrics/" + _inner->name, handle));
