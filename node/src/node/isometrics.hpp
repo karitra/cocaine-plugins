@@ -31,6 +31,11 @@ namespace conf {
     constexpr auto METRICS_POLL_INTERVAL = 1u;
 }
 
+enum class CounterType : unsigned {
+        instant,   // treat value `as is`
+        aggregate, // does isolate returns accumalated value on each request (ioread, etc)
+};
+
 struct metrics_aggregate_proxy_t;
 
 struct worker_metrics_t {
@@ -38,7 +43,7 @@ struct worker_metrics_t {
     struct counter_metric_t {
         using value_type = std::uint64_t;
 
-        bool is_accumulated; // does isolate returns accumalated value on each request (ioread, etc)
+        CounterType type;
         metrics::shared_metric<std::atomic<value_type>> value;
         value_type delta; // if is_accumulated = true then delta = value - prev(value), used for app-wide aggration
     };
@@ -55,7 +60,7 @@ struct worker_metrics_t {
     operator+(worker_metrics_t& src, metrics_aggregate_proxy_t& proxy) -> metrics_aggregate_proxy_t&;
 
     auto
-    operator=(metrics_aggregate_proxy_t&& init) -> worker_metrics_t&;
+    assign(metrics_aggregate_proxy_t&& init) -> void;
 };
 
 struct metrics_aggregate_proxy_t {
@@ -63,7 +68,7 @@ struct metrics_aggregate_proxy_t {
     struct counter_metric_t {
         using value_type = worker_metrics_t::counter_metric_t::value_type;
         // TODO: union?
-        bool is_accumulated;
+        CounterType type;
         value_type values; // summation of worker_metrics values
         value_type deltas; // summation of worker_metrics deltas
     };
@@ -148,6 +153,7 @@ public:
     /// if `isolate_metrics` is false (default), returns nullptr,
     /// and polling sequence wouldn't start.
     ///
+    // TODO: it seems that throw on construction error would be a better choice.
     template<typename Observers>
     static
     auto
@@ -207,15 +213,10 @@ private:
             parent(p)
         {}
 
-        virtual
         auto
-        spawned() -> void override {}
+        spawned(const std::string&) -> void override
+        {}
 
-        virtual
-        auto
-        despawned() -> void override {}
-
-        virtual
         auto
         despawned(const std::string& id) -> void override {
             parent.add_post_mortem(id);

@@ -492,17 +492,15 @@ void
 external_t::metrics(const dynamic_t& query, std::shared_ptr<api::metrics_handle_base_t> handle) const {
 
     auto load = std::make_shared<metrics_load_t>(inner, query, handle);
-    // implicitly copy this->inner to a variable to capture it to avoid expiration of inner
-    auto _inner = inner;
 
-    _inner->io_context.post([=](){
-        if(_inner->session && _inner->prepared) {
-            COCAINE_LOG_DEBUG(_inner->log, "processing metrics request");
+    inner->io_context.post([=](){
+        if(inner->session && inner->prepared) {
+            COCAINE_LOG_DEBUG(inner->log, "processing metrics request");
             load->apply();
         } else {
-            COCAINE_LOG_DEBUG(_inner->log, "can't send metrics request, session not ready");
-            if(_inner->prepared) {
-                _inner->connect();
+            COCAINE_LOG_DEBUG(inner->log, "can't send metrics request, session not ready");
+            if(inner->prepared) {
+                inner->connect();
             }
         }
     });

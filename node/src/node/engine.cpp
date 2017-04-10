@@ -63,27 +63,23 @@ engine_t::engine_t(context_t& context,
     last_timeout(std::chrono::seconds(1)),
     stats(context, manifest_.name, std::chrono::seconds(2))
 {
-    observers->emplace_back(observer);
+    attach_pool_observer(observer);
 
-    if (loop) {
-        const auto isolate = context.repository().get<api::isolate_t>(
-                profile.isolate.type,
-                context,
-                *loop,
-                manifest_.name,
-                profile.isolate.type,
-                profile.isolate.args);
+    const auto isolate = context.repository().get<api::isolate_t>(
+        profile.isolate.type,
+        context,
+        *loop,
+        manifest_.name,
+        profile.isolate.type,
+        profile.isolate.args);
 
-        if (isolate) {
-            metrics_retriever = metrics_retriever_t::make_and_ignite(
-                        context,
-                        manifest_.name,
-                        isolate,
-                        pool,
-                        *loop,
-                        observers);
-        }
-    }
+    metrics_retriever = metrics_retriever_t::make_and_ignite(
+        context,
+        manifest_.name,
+        isolate,
+        pool,
+        *loop,
+        observers);
 
     COCAINE_LOG_DEBUG(log, "overseer has been initialized");
 }
@@ -330,9 +326,7 @@ auto engine_t::assign(slave_t& slave, load_t& load) -> void {
 
 auto engine_t::despawn(const std::string& id, despawn_policy_t policy) -> void {
 
-    auto was_despawned = false;
-
-    pool.apply([&](pool_type& pool) {
+    const auto was_despawned = pool.apply([&](pool_type& pool) {
         auto it = pool.find(id);
         if (it != pool.end()) {
             switch (policy) {
@@ -341,20 +335,22 @@ auto engine_t::despawn(const std::string& id, despawn_policy_t policy) -> void {
                 break;
             case despawn_policy_t::force:
                 pool.erase(it);
-                was_despawned = true;
                 loop->post(std::bind(&engine_t::rebalance_slaves, shared_from_this()));
+                return true;
                 break;
             default:
                 BOOST_ASSERT(false);
             }
         }
+
+        return false;
     });
 
     if (was_despawned) {
         observers.apply([&](const observers_type& observers) {
-            boost::for_each(observers, [&](const std::shared_ptr<pool_observer>& o) {
+            for(auto& o : observers) {
                 o->despawned(id);
-            });
+            }
         });
     }
 }
@@ -395,9 +391,9 @@ auto engine_t::on_handshake(const std::string& id, std::shared_ptr<session_t> se
         });
 
         observers.apply([&](const observers_type& observers) {
-            boost::for_each(observers, [](const std::shared_ptr<pool_observer>& o) {
-                o->spawned();
-            });
+            for(auto& o : observers) {
+                o->spawned({});
+            }
         });
     }
 
@@ -444,9 +440,9 @@ auto engine_t::on_slave_death(const std::error_code& ec, std::string uuid) -> vo
     });
 
     observers.apply([&](const observers_type& observers) {
-        boost::for_each(observers, [&](const std::shared_ptr<pool_observer>& o) {
+        for(auto& o : observers) {
             o->despawned(uuid);
-        });
+        }
     });
 
     loop->post(std::bind(&engine_t::rebalance_slaves, shared_from_this()));

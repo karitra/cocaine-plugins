@@ -160,7 +160,7 @@ public:
 
         rusage ru;
         // note: values used as dummies and don't match real metrics meanings
-        if (getrusage(RUSAGE_THREAD, &ru)) {
+        if (getrusage(RUSAGE_SELF, &ru)) {
             // TODO: send errors?
         }
 

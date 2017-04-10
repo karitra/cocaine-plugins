@@ -89,12 +89,14 @@ struct isolate {
         }
 
         typedef boost::mpl::list<
+            // Isolation daemon metrics query, in common cases - list of uuids.
             dynamic_t
         > argument_type;
 
         typedef isolate_tag dispatch_type;
 
         typedef option_of<
+            // Worker metrics grouped by uuids and application name.
             dynamic_t
         >::tag upstream_type;
     };
@@ -124,7 +126,6 @@ struct isolate_spooled {
 
 template<>
 struct protocol<isolate_tag> {
-
     typedef boost::mpl::int_<
         1
     >::type version;

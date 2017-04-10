@@ -29,31 +29,30 @@ namespace conf {
     constexpr auto PURGATORY_QUEUE_BOUND = 8 * 1024;
     constexpr auto SHOW_ERRORS_LIMIT = 3;
 
-    // <name, is metric monotonically increasing per application (aggregate) level>
-    const std::vector<std::pair<std::string, bool>> counter_metrics_names =
+    const std::vector<std::pair<std::string, CounterType>> counter_metrics_names =
     {
         // yet abstract cpu load measurement
-        { "cpu", false},
+        {"cpu", CounterType::instant},
 
         // memory usage (in bytes)
-        { "vms", false },
-        { "rss", false },
+        {"vms", CounterType::instant},
+        {"rss", CounterType::instant},
 
         // running times
-        { "uptime",    true },
-        { "user_time", true },
-        { "sys_time",  true },
+        {"uptime",    CounterType::aggregate},
+        {"user_time", CounterType::aggregate},
+        {"sys_time",  CounterType::aggregate},
 
         // disk io (in bytes)
-        { "ioread",  true },
-        { "iowrite", true },
+        {"ioread",  CounterType::aggregate},
+        {"iowrite", CounterType::aggregate},
 
         // TODO: network stats
 
     };
 }
 
-namespace aux {
+namespace detail {
 
     template<typename Val>
     auto
@@ -79,17 +78,29 @@ namespace aux {
             os << "\tuuid: " << uuid_value(uuid) << '\n';
         }
     }
+
+    template<typename T>
+    auto
+    make_counter(context_t& ctx, const std::string& name)
+        -> metrics::shared_metric<std::atomic<T>>
+    {
+        return ctx.metrics_hub().counter<std::uint64_t>(name);
+    }
+
+    auto
+    make_uint_counter(context_t& ctx, const std::string& pfx, const std::string& name)
+        -> metrics::shared_metric<std::atomic<std::uint64_t>>
+    {
+        return make_counter<std::uint64_t>(ctx, cocaine::format("{}.{}", pfx, name));
+    }
 }
 
 auto
 metrics_aggregate_proxy_t::operator+(const worker_metrics_t& worker_metrics) -> metrics_aggregate_proxy_t&
 {
-    using boost::adaptors::map_keys;
-    using counters_record_type = worker_metrics_t::counters_record_type;
-
     dbg("worker_metrics_t::operator+() summing to proxy");
 
-    boost::for_each(worker_metrics.common_counters, [&](const counters_record_type &worker_record) {
+    for(const auto& worker_record : worker_metrics.common_counters) {
         const auto& name = worker_record.first;
         const auto& metric = worker_record.second;
 
@@ -97,7 +108,7 @@ metrics_aggregate_proxy_t::operator+(const worker_metrics_t& worker_metrics) -> 
 
         self_record.values += metric.value->load();
         self_record.deltas += metric.delta;
-    });
+    }
 
     return *this;
 }
@@ -109,7 +120,7 @@ operator+(worker_metrics_t& src, metrics_aggregate_proxy_t& proxy) -> metrics_ag
 }
 
 auto
-worker_metrics_t::operator=(metrics_aggregate_proxy_t&& proxy) -> worker_metrics_t& {
+worker_metrics_t::assign(metrics_aggregate_proxy_t&& proxy) -> void {
 
     dbg("worker_metrics_t::operator=() moving from proxy");
 
@@ -118,12 +129,12 @@ worker_metrics_t::operator=(metrics_aggregate_proxy_t&& proxy) -> worker_metrics
         // no active workers, zero out some metrics values
         for(const auto& init_metrics : conf::counter_metrics_names) {
             const auto& name = init_metrics.first;
-            const auto& must_be_preserved = init_metrics.second;
+            const auto& type = init_metrics.second;
 
-            dbg("preserved " << name << " : " << must_be_preserved);
+            dbg("preserved " << name << " : " << static_cast<int>(type));
 
             auto self_it = this->common_counters.find(name);
-            if (self_it != std::end(this->common_counters) && must_be_preserved == false) {
+            if (self_it != std::end(this->common_counters) && type == CounterType::instant) {
                     self_it->second.value->store(0);
             }
         }
@@ -138,17 +149,20 @@ worker_metrics_t::operator=(metrics_aggregate_proxy_t&& proxy) -> worker_metrics
             if (self_it != std::end(this->common_counters)) {
                 auto& self_record = self_it->second;
 
-                if (self_record.is_accumulated) { // monotonically increasing
-                    self_record.value->fetch_add(proxy_record.deltas);
-                } else {
-                    self_record.value->store(proxy_record.values);
+                switch (self_record.type) {
+                    case CounterType::aggregate:
+                        self_record.value->fetch_add(proxy_record.deltas);
+                        break;
+                    case CounterType::instant:
+                        self_record.value->store(proxy_record.values);
+                        break;
+                    default:
+                        break;
                 }
             }
 
         } // for metrics in proxy
     }
-
-    return *this;
 }
 
 // TODO: error messages processing
@@ -161,8 +175,7 @@ struct response_processor_t {
     };
 
     response_processor_t(const std::string app_name) :
-        app_name(app_name),
-        processed{false}
+        app_name(app_name)
     {}
 
     auto
@@ -197,7 +210,7 @@ struct response_processor_t {
                     continue;
                 }
 
-                if (uuid.compare("error") == 0) {
+                if (uuid == std::string("error")) {
                     parse_error_record(metrics);
                     continue;
                 }
@@ -209,7 +222,7 @@ struct response_processor_t {
                     // would be removed from request list and from stats table
                     // on next poll iteration preparation.
                     dbg("[response] inserting new metrics record with uuid" << uuid);
-                    tie(stat_it, std::ignore) = stats_table.emplace(uuid, worker_metrics_t{ctx, app_name, uuid});
+                    std::tie(stat_it, std::ignore) = stats_table.emplace(uuid, worker_metrics_t{ctx, app_name, uuid});
                 }
 
                 auto common_it = metrics.find("common");
@@ -223,29 +236,22 @@ struct response_processor_t {
             }
         }
 
-        processed = true;
-
         return uuids_processed;
     }
 
     auto
-    is_processed() const -> bool {
-        return processed;
-    }
-
-    auto
     errors_count() const -> std::size_t {
-        return errors.size();
+        return isolate_errors.size();
     }
 
     auto
     has_errors() -> bool {
-        return ! errors.empty();
+        return !isolate_errors.empty();
     }
 
     auto
-    errors_ref() -> const std::vector<error_t>& {
-        return errors;
+    errors() -> const std::vector<error_t>& {
+        return isolate_errors;
     }
 
 private:
@@ -255,7 +261,7 @@ private:
         const auto& error_message = metrics.at("error.message", "none").as_string();
         const auto& error_code    = metrics.at("error.code", 0).as_int();
 
-        errors.emplace_back(error_t{error_code, error_message});
+        isolate_errors.emplace_back(error_t{error_code, error_message});
 
         dbg("[response] got an error: " << error_message << " code: " << error_code);
     }
@@ -272,13 +278,12 @@ private:
 
             dbg("[response] metrics name: " << name);
 
-            // cut off type from name
-            const auto pos = name.find('.');
-            const auto nm = name.substr(0, pos);
+            std::string nm;
+            // type not checked (for now)
+            std::tie(nm, std::ignore) = decay_name(name);
 
             if (nm.empty()) {
                 // protocol error: ingore silently
-                // type not checked (for now)
                 continue;
             }
 
@@ -291,7 +296,7 @@ private:
                     auto& record = r->second;
                     const auto& incoming_value = metric.second.as_uint();
 
-                    if (record.is_accumulated) {
+                    if (record.type == CounterType::aggregate) {
                         const auto& current = record.value->load();
                         if (incoming_value >= current) {
                             record.delta = incoming_value - current;
@@ -300,8 +305,7 @@ private:
 
                     record.value->store(incoming_value);
                 }
-            // note: e is boost::bad_get in current implementaion
-            } catch (const std::exception& e) {
+            } catch (const boost::bad_get& e) {
                 dbg("[response] parsing exception: " << e.what());
                 continue;
             }
@@ -312,21 +316,35 @@ private:
     }
 
 private:
-    std::string app_name;
 
-    bool processed;
-    std::vector<error_t> errors;
+    auto
+    decay_name(const std::string& name, const char sep='.') -> std::tuple<std::string, std::string> {
+        // cut off type from name
+        const auto pos = name.find(sep);
+
+        if (pos == std::string::npos) {
+            return std::make_tuple( name, "");
+        }
+
+        const auto nm = name.substr(0, pos);
+        const auto tp = name.substr(pos + 1);
+
+        return std::make_tuple( nm, tp);
+    }
+
+    std::string app_name;
+    std::vector<error_t> isolate_errors;
 };
 
 worker_metrics_t::worker_metrics_t(context_t& ctx, const std::string& name_prefix)
 {
     for(const auto& metrics_init : conf::counter_metrics_names) {
         const auto& name = metrics_init.first;
-        const auto& is_aggregate = metrics_init.second;
+        const auto& type = metrics_init.second;
 
         common_counters.emplace(name,
             counter_metric_t{
-                is_aggregate,
+                type,
                 ctx.metrics_hub().counter<std::uint64_t>(cocaine::format("{}.{}", name_prefix, name)),
                 0 });
     }
@@ -336,13 +354,13 @@ worker_metrics_t::worker_metrics_t(context_t& ctx, const std::string& app_name, 
     worker_metrics_t(ctx, cocaine::format("{}.isolate.{}", app_name, id))
 {}
 
-metrics_retriever_t::self_metrics_t::self_metrics_t(context_t& ctx, const std::string& name) :
-   uuid_requested{ctx.metrics_hub().counter<std::uint64_t>(cocaine::format("{}.uuid_requested", name))},
-   uuid_recieved{ctx.metrics_hub().counter<std::uint64_t>(cocaine::format("{}.uuid_recieved", name))},
-   requests_send{ctx.metrics_hub().counter<std::uint64_t>(cocaine::format("{}.requests", name))},
-   responses_received{ctx.metrics_hub().counter<std::uint64_t>(cocaine::format("{}.responses", name))},
-   receive_errors{ctx.metrics_hub().counter<std::uint64_t>(cocaine::format("{}.recieve.errors", name))},
-   posmortem_queue_size{ctx.metrics_hub().counter<std::uint64_t>(cocaine::format("{}.postmortem.queue.size", name))}
+metrics_retriever_t::self_metrics_t::self_metrics_t(context_t& ctx, const std::string& pfx) :
+   uuid_requested{detail::make_uint_counter(ctx, pfx, "uuid_requested")},
+   uuid_recieved{detail::make_uint_counter(ctx, pfx, "uuid_recieved")},
+   requests_send{detail::make_uint_counter(ctx, pfx, "requests")},
+   responses_received{detail::make_uint_counter(ctx, pfx, "responses")},
+   receive_errors{detail::make_uint_counter(ctx, pfx, "recieve.errors")},
+   posmortem_queue_size{detail::make_uint_counter(ctx, pfx, "postmortem.queue.size")}
 {}
 
 metrics_retriever_t::metrics_retriever_t(
@@ -491,7 +509,8 @@ metrics_retriever_t::metrics_handle_t::on_data(const dynamic_t& data) -> void {
         const auto processed_count = processor(parent->context, data, table);
 
         // update application-wide aggregate of metrics
-        parent->app_aggregate_metrics = boost::accumulate( table | map_values, metrics_aggregate_proxy_t());
+        parent->app_aggregate_metrics.assign(
+            boost::accumulate( table | map_values, metrics_aggregate_proxy_t()));
 
         return processed_count;
     });
@@ -500,15 +519,15 @@ metrics_retriever_t::metrics_handle_t::on_data(const dynamic_t& data) -> void {
     parent->self_metrics.responses_received->fetch_add(1);
 
     if (processor.has_errors()) {
-            const auto& errors = processor.errors_ref();
-            auto break_counter = int{};
+        const auto& errors = processor.errors();
+        auto break_counter = int{};
 
-            for(const auto& e : errors) {
-                if (++break_counter > conf::SHOW_ERRORS_LIMIT) {
-                    break;
-                }
-                COCAINE_LOG_DEBUG(parent->log, "isolation metrics got an error {} {}", e.code, e.message);
+        for(const auto& e : errors) {
+            if (++break_counter > conf::SHOW_ERRORS_LIMIT) {
+                break;
             }
+            COCAINE_LOG_DEBUG(parent->log, "isolation metrics got an error {} {}", e.code, e.message);
+        }
     }
 }
 

@@ -13,19 +13,11 @@ public:
     /// Called when a slave was spawned.
     virtual
     auto
-    spawned() -> void = 0;
-
-    /// Called when a slave was despawned.
-    virtual
-    auto
-    despawned() -> void = 0;
+    spawned(const std::string& id) -> void = 0;
 
     virtual
     auto
-    despawned(const std::string& /* id */) -> void
-    {
-        despawned();
-    }
+    despawned(const std::string& id) -> void;
 };
 
 } // namespace node

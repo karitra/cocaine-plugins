@@ -471,17 +471,16 @@ private:
     }
 
     struct observer_adapter_t : public pool_observer {
-        using pool_observer::despawned;
 
         observer_adapter_t(running_t& rstate) :
             parent(rstate)
         {}
 
-        virtual auto despawned() -> void override {
+        auto despawned(const std::string&) -> void override {
             parent.despawned();
         }
 
-        virtual auto spawned() -> void override {
+        auto spawned(const std::string&) -> void override {
             parent.spawned();
         }
 

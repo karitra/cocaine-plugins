@@ -32,6 +32,7 @@
 #include <array>
 #include <iostream>
 
+#include <cassert>
 #include <csignal>
 
 #include <asio/deadline_timer.hpp>
@@ -432,9 +433,10 @@ process_t::spawn(const std::string& path,
 }
 
 void
-process_t::metrics(const dynamic_t&, std::shared_ptr<api::metrics_handle_base_t>) const
+process_t::metrics(const dynamic_t&, std::shared_ptr<api::metrics_handle_base_t> handle) const
 {
-    COCAINE_LOG_WARNING(m_log, "legacy_process::metrics not implemented");
+    assert(handle);
+    return handle->on_data({});
 }
 
 } // namespace isolate
