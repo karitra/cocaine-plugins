@@ -79,17 +79,16 @@ struct spool_slot_t:
 {
 public:
     typedef typename io::aux::protocol_impl<typename io::event_traits<io::isolate::spool>::upstream_type>::type protocol;
-    typedef typename io::basic_slot<io::isolate::spool>::dispatch_type dispatch_type;
 
     virtual
-    boost::optional<std::shared_ptr<dispatch_type>>
+    result_type
     operator()(const std::vector<hpack::header_t>&, tuple_type&& args, upstream_type&& upstream)
     {
         COCAINE_LOG_INFO(log, "spool. {}, {}", boost::lexical_cast<std::string>(std::get<0>(args)), std::get<1>(args));
         sleep(1);
         upstream.send<protocol::value>();
         COCAINE_LOG_INFO(log, "spool. sent value");
-        return boost::optional<std::shared_ptr<dispatch_type>>(std::make_shared<spooled_dispatch_t>());
+        return result_type(std::make_shared<spooled_dispatch_t>());
     }
 };
 
@@ -98,17 +97,16 @@ struct spawn_slot_t:
 {
 public:
     typedef typename io::aux::protocol_impl<typename io::event_traits<io::isolate::spawn>::upstream_type>::type protocol;
-    typedef typename io::basic_slot<io::isolate::spawn>::dispatch_type dispatch_type;
 
     virtual
-    boost::optional<std::shared_ptr<dispatch_type>>
+    result_type
     operator()(tuple_type&& args, upstream_type&& upstream)
     {
         return operator()({}, std::move(args), std::move(upstream));
     }
 
     virtual
-    boost::optional<std::shared_ptr<dispatch_type>>
+    result_type    
     operator()(const std::vector<hpack::header_t>&, tuple_type&& args, upstream_type&& upstream)
     {
         aux::formatter_t formatter;
@@ -131,7 +129,7 @@ public:
         sleep(1);
         upstream.send<protocol::choke>();
         COCAINE_LOG_INFO(log, "spawn. done");
-        return boost::optional<std::shared_ptr<dispatch_type>>(std::make_shared<spawned_dispatch_t>());
+        return result_type(std::make_shared<spawned_dispatch_t>());
     }
 };
 
@@ -140,17 +138,16 @@ struct metrics_slot_t:
 {
 public:
     typedef typename io::aux::protocol_impl<typename io::event_traits<io::isolate::metrics>::upstream_type>::type protocol;
-    typedef typename io::basic_slot<io::isolate::metrics>::dispatch_type dispatch_type;
 
     virtual
-    boost::optional<std::shared_ptr<dispatch_type>>
+    result_type
     operator()(tuple_type&& args, upstream_type&& upstream)
     {
         return operator()({}, std::move(args), std::move(upstream));
     }
 
     virtual
-    boost::optional<std::shared_ptr<dispatch_type>>
+    result_type
     operator()(const std::vector<hpack::header_t>&, tuple_type&& args, upstream_type&& upstream)
     {
         const auto& query = std::get<0>(args);

@@ -176,7 +176,7 @@ struct metrics_load_t {
 
     dynamic_t query;
 
-    synchronized<io::upstream_ptr_t> stream;
+    io::upstream_ptr_t stream;
 
     metrics_load_t(std::shared_ptr<external_t::inner_t> _inner,
                    const dynamic_t& _query,
@@ -398,18 +398,15 @@ spawn_load_t::apply() {
 
 void
 metrics_load_t::apply() {
-    auto _inner = inner;
-    stream.apply([&](decltype(stream.unsafe())& stream){
-        try {
-            stream = _inner->session->fork(std::make_shared<metrics_dispatch_t>("external_metrics/" + _inner->name, handle));
-            stream->send<io::isolate::metrics>(query);
-        } catch (const std::system_error& e) {
-            COCAINE_LOG_WARNING(_inner->log, "could not process isolation metrics request: {}", error::to_string(e));
-            handle->on_error(e.code(), e.what());
-            _inner->session->detach(e.code());
-            _inner->connect();
-        }
-    });
+    try {
+        stream = inner->session->fork(std::make_shared<metrics_dispatch_t>("external_metrics/" + inner->name, handle));
+        stream->send<io::isolate::metrics>(query);
+    } catch (const std::system_error& e) {
+        COCAINE_LOG_WARNING(inner->log, "could not process isolation metrics request: {}", error::to_string(e));
+        handle->on_error(e.code(), e.what());
+        inner->session->detach(e.code());
+        inner->connect();
+    }
 }
 
 void
@@ -499,6 +496,7 @@ external_t::metrics(const dynamic_t& query, std::shared_ptr<api::metrics_handle_
             load->apply();
         } else {
             COCAINE_LOG_DEBUG(inner->log, "can't send metrics request, session not ready");
+            handle->on_error(error::not_connected, "session not ready");
             if(inner->prepared) {
                 inner->connect();
             }

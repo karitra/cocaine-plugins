@@ -29,12 +29,12 @@ namespace service {
 namespace node {
 
 namespace conf {
-    constexpr auto METRICS_POLL_INTERVAL_S = 2u;
+    constexpr auto metrics_poll_interval_s = 2u;
 }
 
-enum class CounterType : unsigned {
+enum class counter_type_t : unsigned {
         instant,   // treat value `as is`
-        aggregate, // does isolate returns accumalated value on each request (ioread, etc)
+        aggregate, // isolate returns accumalated value on each request (ioread, etc)
 };
 
 struct metrics_aggregate_proxy_t;
@@ -44,7 +44,7 @@ struct worker_metrics_t {
     struct counter_metric_t {
         using value_type = std::uint64_t;
 
-        CounterType type;
+        counter_type_t type;
         metrics::shared_metric<std::atomic<value_type>> value;
         value_type delta; // if is_accumulated = true then delta = value - prev(value), used for app-wide aggration
     };
@@ -71,7 +71,7 @@ struct metrics_aggregate_proxy_t {
     struct counter_metric_t {
         using value_type = worker_metrics_t::counter_metric_t::value_type;
         // TODO: union?
-        CounterType type;
+        counter_type_t type;
         value_type values; // summation of worker_metrics values
         value_type deltas; // summation of worker_metrics deltas
     };
@@ -241,17 +241,14 @@ metrics_retriever_t::make_and_ignite(
     asio::io_service& loop,
     synchronized<Observers>& observers) -> std::shared_ptr<metrics_retriever_t>
 {
+    // TODO: node service can be set with another name
     const auto node_config = ctx.config().component_group("services").get("node");
 
-    if (!node_config) {
-        return nullptr;
-    }
-
-    if (isolate) {
+    if (node_config && isolate) {
         const auto args = node_config->args().as_object();
 
         const auto& should_start = args.at("isolate_metrics", false).as_bool();
-        const auto& poll_interval = args.at("isolate_metrics_poll_period_s", conf::METRICS_POLL_INTERVAL_S).as_uint();
+        const auto& poll_interval = args.at("isolate_metrics_poll_period_s", conf::metrics_poll_interval_s).as_uint();
 
         if (should_start) {
             auto retriever = std::make_shared<metrics_retriever_t>(
@@ -262,14 +259,14 @@ metrics_retriever_t::make_and_ignite(
                 loop,
                 poll_interval);
 
-                observers->emplace_back(retriever->make_observer());
-                retriever->ignite_poll();
+            observers->emplace_back(retriever->make_observer());
+            retriever->ignite_poll();
 
-                return retriever;
+            return retriever;
         }
     }
 
-    return nullptr;
+    throw error::component_not_found;
 }
 
 }  // namespace node

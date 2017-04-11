@@ -156,7 +156,7 @@ public:
     /// Cancels all asynchronous pending operations, preparing for destruction.
     auto cancel() -> void;
 
-    auto attach_pool_observer(const std::shared_ptr<pool_observer>& observer) -> void;
+    auto attach_pool_observer(std::shared_ptr<pool_observer> observer) -> void;
 private:
     /// Spawns a slave using current manifest and profile.
     auto spawn(pool_type& pool) -> void;

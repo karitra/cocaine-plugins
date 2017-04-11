@@ -11,6 +11,7 @@
 // #define ISOMETRICS_DEBUG
 #undef ISOMETRICS_DEBUG
 
+// TODO: deprecated
 #ifdef ISOMETRICS_DEBUG
 #define dbg(msg) std::cerr << msg << '\n'
 #define DBG_DUMP_UUIDS(os, logo, container) aux::dump_uuids(os, logo, container)
@@ -27,32 +28,32 @@ namespace node {
 namespace ph = std::placeholders;
 
 namespace conf {
-    constexpr auto PURGATORY_QUEUE_BOUND = 8 * 1024;
-    constexpr auto SHOW_ERRORS_LIMIT = 3;
+    constexpr auto purgatory_queue_bound = 8 * 1024;
+    constexpr auto show_errors_limit = 3;
 
     // Number of poll iterations without worker metrics updates, used to signal
     // (post warning to log, etc,) the cases when isolate is active,
     // but for some reason `forget` to send metrics for active worker without
     // signaling any error.
-    constexpr auto MISSED_UPDATES_TIMES = 10;
+    constexpr auto missed_updates_times = 10;
 
-    const std::vector<std::pair<std::string, CounterType>> counter_metrics_names =
+    const std::vector<std::pair<std::string, counter_type_t>> counter_metrics_names =
     {
         // yet abstract cpu load measurement
-        {"cpu", CounterType::instant},
+        {"cpu", counter_type_t::instant},
 
         // memory usage (in bytes)
-        {"vms", CounterType::instant},
-        {"rss", CounterType::instant},
+        {"vms", counter_type_t::instant},
+        {"rss", counter_type_t::instant},
 
         // running times
-        {"uptime",    CounterType::aggregate},
-        {"user_time", CounterType::aggregate},
-        {"sys_time",  CounterType::aggregate},
+        {"uptime",    counter_type_t::aggregate},
+        {"user_time", counter_type_t::aggregate},
+        {"sys_time",  counter_type_t::aggregate},
 
         // disk io (in bytes)
-        {"ioread",  CounterType::aggregate},
-        {"iowrite", CounterType::aggregate},
+        {"ioread",  counter_type_t::aggregate},
+        {"iowrite", counter_type_t::aggregate},
 
         // TODO: network stats
 
@@ -141,7 +142,7 @@ worker_metrics_t::assign(metrics_aggregate_proxy_t&& proxy) -> void {
             dbg("preserved " << name << " : " << static_cast<int>(type));
 
             auto self_it = this->common_counters.find(name);
-            if (self_it != std::end(this->common_counters) && type == CounterType::instant) {
+            if (self_it != std::end(this->common_counters) && type == counter_type_t::instant) {
                     self_it->second.value->store(0);
             }
         }
@@ -157,10 +158,10 @@ worker_metrics_t::assign(metrics_aggregate_proxy_t&& proxy) -> void {
                 auto& self_record = self_it->second;
 
                 switch (self_record.type) {
-                    case CounterType::aggregate:
+                    case counter_type_t::aggregate:
                         self_record.value->fetch_add(proxy_record.deltas);
                         break;
-                    case CounterType::instant:
+                    case counter_type_t::instant:
                         self_record.value->store(proxy_record.values);
                         break;
                 }
@@ -328,7 +329,7 @@ private:
                     auto& record = r->second;
                     const auto& incoming_value = metric.second.as_uint();
 
-                    if (record.type == CounterType::aggregate) {
+                    if (record.type == counter_type_t::aggregate) {
                         const auto& current = record.value->load();
                         if (incoming_value >= current) {
                             record.delta = incoming_value - current;
@@ -370,7 +371,7 @@ private:
     std::vector<error_t> isolate_errors;
 
     // Table of workers uuids (and their update time stamps) which wasn't
-    // updated for poll_interval * MISSED_UPDATES_TIMES period of time.
+    // updated for poll_interval * missed_updates_times period of time.
     // Used to signal (post to log) a warning.
     faded_update_mapping_type faded;
 };
@@ -431,7 +432,7 @@ metrics_retriever_t::ignite_poll() -> void {
 
 auto
 metrics_retriever_t::add_post_mortem(const std::string& id) -> void {
-    if (purgatory->size() >= conf::PURGATORY_QUEUE_BOUND) {
+    if (purgatory->size() >= conf::purgatory_queue_bound) {
         // on high despawn rates stat of some unlucky workers will be lost
         COCAINE_LOG_INFO(log, "worker metrics retriever: dead worker stat will be discarded for {}", id);
         return;
@@ -539,7 +540,7 @@ metrics_retriever_t::metrics_handle_t::on_data(const dynamic_t& data) -> void {
 
     COCAINE_LOG_DEBUG(parent->log, "processing isolation metrics response");
 
-    const auto faded_timeout = std::chrono::seconds(parent->poll_interval.total_seconds() * conf::MISSED_UPDATES_TIMES);
+    const auto faded_timeout = std::chrono::seconds(parent->poll_interval.total_seconds() * conf::missed_updates_times);
     response_processor_t processor(parent->app_name);
 
     // should not harm performance, as this handler would be called from same
@@ -564,7 +565,7 @@ metrics_retriever_t::metrics_handle_t::on_data(const dynamic_t& data) -> void {
         auto break_counter = int{};
 
         for(const auto& e : errors) {
-            if (++break_counter > conf::SHOW_ERRORS_LIMIT) {
+            if (++break_counter > conf::show_errors_limit) {
                 break;
             }
             COCAINE_LOG_DEBUG(parent->log, "isolation metrics got an error {} {}", e.code, e.message);
@@ -574,7 +575,8 @@ metrics_retriever_t::metrics_handle_t::on_data(const dynamic_t& data) -> void {
     for(const auto& faded : processor.faded_updates()) {
         const auto& uuid = faded.first;
         const auto& duration = faded.second;
-        COCAINE_LOG_WARNING(parent->log, "no isolate metrics for active worker \"{}\" for {} second(s)", uuid, duration.count());
+
+        COCAINE_LOG_WARNING(parent->log, "no isolate metrics for active worker {} for {} second(s)", uuid, duration.count());
     }
 }
 
@@ -582,6 +584,10 @@ auto
 metrics_retriever_t::metrics_handle_t::on_error(const std::error_code& error, const std::string& what) -> void {
     assert(parent);
     dbg("metrics_handle_t::on_error: " << what);
+
+    if (error == error::not_connected) {
+        return;
+    }
 
     // TODO: start crying?
     COCAINE_LOG_WARNING(parent->log, "worker metrics recieve error {}:{}", error, what);

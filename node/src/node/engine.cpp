@@ -63,7 +63,7 @@ engine_t::engine_t(context_t& context,
     last_timeout(std::chrono::seconds(1)),
     stats(context, manifest_.name, std::chrono::seconds(2))
 {
-    attach_pool_observer(observer);
+    attach_pool_observer(std::move(observer));
 
     const auto isolate = context.repository().get<api::isolate_t>(
         profile.isolate.type,
@@ -73,13 +73,17 @@ engine_t::engine_t(context_t& context,
         profile.isolate.type,
         profile.isolate.args);
 
-    metrics_retriever = metrics_retriever_t::make_and_ignite(
-        context,
-        manifest_.name,
-        isolate,
-        pool,
-        *loop,
-        observers);
+    try {
+        metrics_retriever = metrics_retriever_t::make_and_ignite(
+            context,
+            manifest_.name,
+            isolate,
+            pool,
+            *loop,
+            observers);
+    } catch(const error::repository_errors& err) {
+        COCAINE_LOG_WARNING(log, "failed to init metrics poll sequence, error {}", err);
+    }
 
     COCAINE_LOG_DEBUG(log, "overseer has been initialized");
 }
@@ -111,8 +115,8 @@ engine_t::profile() const {
 }
 
 void
-engine_t::attach_pool_observer(const std::shared_ptr<pool_observer>& observer) {
-    observers->emplace_back(observer);
+engine_t::attach_pool_observer(std::shared_ptr<pool_observer> observer) {
+    observers->emplace_back(std::move(observer));
 }
 
 auto engine_t::info(io::node::info::flags_t flags) const -> dynamic_t::object_t {
