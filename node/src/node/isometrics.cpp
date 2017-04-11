@@ -1,5 +1,6 @@
 #include <tuple>
 #include <cassert>
+#include <unordered_map>
 
 #include "isometrics.hpp"
 
@@ -28,6 +29,12 @@ namespace ph = std::placeholders;
 namespace conf {
     constexpr auto PURGATORY_QUEUE_BOUND = 8 * 1024;
     constexpr auto SHOW_ERRORS_LIMIT = 3;
+
+    // Number of poll iterations without worker metrics updates, used to signal
+    // (post warning to log, etc,) the cases when isolate is active,
+    // but for some reason `forget` to send metrics for active worker without
+    // signaling any error.
+    constexpr auto MISSED_UPDATES_TIMES = 10;
 
     const std::vector<std::pair<std::string, CounterType>> counter_metrics_names =
     {
@@ -156,8 +163,6 @@ worker_metrics_t::assign(metrics_aggregate_proxy_t&& proxy) -> void {
                     case CounterType::instant:
                         self_record.value->store(proxy_record.values);
                         break;
-                    default:
-                        break;
                 }
             }
 
@@ -168,6 +173,7 @@ worker_metrics_t::assign(metrics_aggregate_proxy_t&& proxy) -> void {
 // TODO: error messages processing
 struct response_processor_t {
     using stats_table_type = metrics_retriever_t::stats_table_type;
+    using faded_update_mapping_type = std::unordered_map<std::string, std::chrono::seconds>;
 
     struct error_t {
         long code;
@@ -179,12 +185,16 @@ struct response_processor_t {
     {}
 
     auto
-    operator()(context_t& ctx, const dynamic_t& response, stats_table_type& stats_table) -> size_t {
-        return process(ctx, response, stats_table);
+    operator()(context_t& ctx, const dynamic_t& response, stats_table_type& stats_table,
+        const std::chrono::seconds& faded_timeout) -> size_t
+    {
+        return process(ctx, response, stats_table, faded_timeout);
     }
 
     auto
-    process(context_t& ctx, const dynamic_t& response, stats_table_type& stats_table) -> size_t {
+    process(context_t& ctx, const dynamic_t& response, stats_table_type& stats_table,
+       const std::chrono::seconds& faded_timeout) -> size_t
+    {
         const auto apps = response.as_object();
 
         auto uuids_processed = size_t{};
@@ -200,6 +210,7 @@ struct response_processor_t {
             // }
 
             const auto uuids = app.second.as_object();
+            const auto now = worker_metrics_t::clock_type::now();
 
             for(const auto& item : uuids) {
                 const auto& uuid = item.first;
@@ -231,8 +242,16 @@ struct response_processor_t {
                     continue;
                 }
 
-                fill_metrics(common_it->second.as_object(), stat_it->second.common_counters);
-                ++uuids_processed;
+                const auto& updated_count = this->fill_metrics(common_it->second.as_object(), stat_it->second.common_counters);
+
+                if (updated_count) {
+                    stat_it->second.update_stamp = now;
+                } else {
+                    const auto& update_span = now - stat_it->second.update_stamp;
+                    if (update_span > faded_timeout) {
+                        faded.emplace(uuid, std::chrono::duration_cast<std::chrono::seconds>(update_span));
+                    }
+                }
             }
         }
 
@@ -245,13 +264,23 @@ struct response_processor_t {
     }
 
     auto
-    has_errors() -> bool {
+    has_errors() const -> bool {
         return !isolate_errors.empty();
     }
 
     auto
     errors() -> const std::vector<error_t>& {
         return isolate_errors;
+    }
+
+    auto
+    has_faded() const -> bool {
+        return !faded.empty();
+    }
+
+    auto
+    faded_updates() -> const faded_update_mapping_type& {
+        return faded;
     }
 
 private:
@@ -267,10 +296,13 @@ private:
     }
 
     auto
-    fill_metrics(const dynamic_t::object_t& metrics, worker_metrics_t::counters_table_type& result) -> void {
+    fill_metrics(const dynamic_t::object_t& metrics, worker_metrics_t::counters_table_type& result) -> size_t {
+
+        auto updated = size_t{};
 
         if (metrics.count("error.message")) {
             parse_error_record(metrics);
+            return updated;
         }
 
         for(const auto& metric : metrics) {
@@ -280,7 +312,7 @@ private:
 
             std::string nm;
             // type not checked (for now)
-            std::tie(nm, std::ignore) = decay_name(name);
+            std::tie(nm, std::ignore) = decay_metric_name(name);
 
             if (nm.empty()) {
                 // protocol error: ingore silently
@@ -304,39 +336,47 @@ private:
                     }
 
                     record.value->store(incoming_value);
+                    ++updated;
                 }
+
             } catch (const boost::bad_get& e) {
                 dbg("[response] parsing exception: " << e.what());
                 continue;
             }
-
         } // for each metric
 
         dbg("[response] fill_metrics done");
+        return updated;
     }
 
 private:
 
     auto
-    decay_name(const std::string& name, const char sep='.') -> std::tuple<std::string, std::string> {
+    decay_metric_name(const std::string& name, const char sep='.') -> std::tuple<std::string, std::string> {
         // cut off type from name
         const auto pos = name.find(sep);
 
         if (pos == std::string::npos) {
-            return std::make_tuple( name, "");
+            return std::make_tuple(name, "");
         }
 
         const auto nm = name.substr(0, pos);
         const auto tp = name.substr(pos + 1);
 
-        return std::make_tuple( nm, tp);
+        return std::make_tuple(nm, tp);
     }
 
     std::string app_name;
     std::vector<error_t> isolate_errors;
+
+    // Table of workers uuids (and their update time stamps) which wasn't
+    // updated for poll_interval * MISSED_UPDATES_TIMES period of time.
+    // Used to signal (post to log) a warning.
+    faded_update_mapping_type faded;
 };
 
-worker_metrics_t::worker_metrics_t(context_t& ctx, const std::string& name_prefix)
+worker_metrics_t::worker_metrics_t(context_t& ctx, const std::string& name_prefix) :
+    update_stamp(clock_type::now())
 {
     for(const auto& metrics_init : conf::counter_metrics_names) {
         const auto& name = metrics_init.first;
@@ -345,7 +385,7 @@ worker_metrics_t::worker_metrics_t(context_t& ctx, const std::string& name_prefi
         common_counters.emplace(name,
             counter_metric_t{
                 type,
-                ctx.metrics_hub().counter<std::uint64_t>(cocaine::format("{}.{}", name_prefix, name)),
+                detail::make_uint_counter(ctx, name_prefix, name),
                 0 });
     }
 }
@@ -499,6 +539,7 @@ metrics_retriever_t::metrics_handle_t::on_data(const dynamic_t& data) -> void {
 
     COCAINE_LOG_DEBUG(parent->log, "processing isolation metrics response");
 
+    const auto faded_timeout = std::chrono::seconds(parent->poll_interval.total_seconds() * conf::MISSED_UPDATES_TIMES);
     response_processor_t processor(parent->app_name);
 
     // should not harm performance, as this handler would be called from same
@@ -506,7 +547,7 @@ metrics_retriever_t::metrics_handle_t::on_data(const dynamic_t& data) -> void {
     const auto processed_count = parent->metrics.apply([&](metrics_retriever_t::stats_table_type& table) {
 
         // fill workers current `slice` state of metrics table
-        const auto processed_count = processor(parent->context, data, table);
+        const auto processed_count = processor(parent->context, data, table, faded_timeout);
 
         // update application-wide aggregate of metrics
         parent->app_aggregate_metrics.assign(
@@ -528,6 +569,12 @@ metrics_retriever_t::metrics_handle_t::on_data(const dynamic_t& data) -> void {
             }
             COCAINE_LOG_DEBUG(parent->log, "isolation metrics got an error {} {}", e.code, e.message);
         }
+    }
+
+    for(const auto& faded : processor.faded_updates()) {
+        const auto& uuid = faded.first;
+        const auto& duration = faded.second;
+        COCAINE_LOG_WARNING(parent->log, "no isolate metrics for active worker \"{}\" for {} second(s)", uuid, duration.count());
     }
 }
 

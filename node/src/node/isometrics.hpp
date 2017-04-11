@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <memory>
 
 #include <blackhole/logger.hpp>
@@ -28,7 +29,7 @@ namespace service {
 namespace node {
 
 namespace conf {
-    constexpr auto METRICS_POLL_INTERVAL = 1u;
+    constexpr auto METRICS_POLL_INTERVAL_S = 2u;
 }
 
 enum class CounterType : unsigned {
@@ -48,10 +49,12 @@ struct worker_metrics_t {
         value_type delta; // if is_accumulated = true then delta = value - prev(value), used for app-wide aggration
     };
 
+    using clock_type = std::chrono::system_clock;
     using counters_table_type = std::unordered_map<std::string, counter_metric_t>;
     using counters_record_type = counters_table_type::value_type;
 
     counters_table_type common_counters;
+    clock_type::time_point update_stamp;
 
     worker_metrics_t(context_t& ctx, const std::string& name_prefix);
     worker_metrics_t(context_t& ctx, const std::string& app_name, const std::string& id);
@@ -248,7 +251,7 @@ metrics_retriever_t::make_and_ignite(
         const auto args = node_config->args().as_object();
 
         const auto& should_start = args.at("isolate_metrics", false).as_bool();
-        const auto& poll_interval = args.at("isolate_metrics_poll_period_s", conf::METRICS_POLL_INTERVAL).as_uint();
+        const auto& poll_interval = args.at("isolate_metrics_poll_period_s", conf::METRICS_POLL_INTERVAL_S).as_uint();
 
         if (should_start) {
             auto retriever = std::make_shared<metrics_retriever_t>(

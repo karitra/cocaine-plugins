@@ -17,7 +17,7 @@ public:
 
     virtual
     auto
-    despawned(const std::string& id) -> void;
+    despawned(const std::string& id) -> void = 0;
 };
 
 } // namespace node
