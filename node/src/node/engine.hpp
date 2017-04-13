@@ -157,6 +157,8 @@ public:
     auto cancel() -> void;
 
     auto attach_pool_observer(std::shared_ptr<pool_observer> observer) -> void;
+
+    auto ids_of_pool() const -> std::vector<std::string>;
 private:
     /// Spawns a slave using current manifest and profile.
     auto spawn(pool_type& pool) -> void;

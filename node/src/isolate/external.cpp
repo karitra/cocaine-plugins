@@ -482,9 +482,6 @@ external_t::spawn(const std::string& path,
     return std::unique_ptr<api::cancellation_t>(new api::cancellation_wrapper(load));
 }
 
-
-// TODO: is concurrency supported?
-// it seems that spool and spawn concurrent access is ensured by state machine.
 void
 external_t::metrics(const dynamic_t& query, std::shared_ptr<api::metrics_handle_base_t> handle) const {
 

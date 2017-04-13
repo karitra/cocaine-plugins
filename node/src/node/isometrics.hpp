@@ -21,18 +21,18 @@
 
 #include "node/pool_observer.hpp"
 
-#include "engine.hpp"
-
 namespace cocaine {
 namespace detail {
 namespace service {
 namespace node {
 
+class engine_t;
+
 namespace conf {
     constexpr auto metrics_poll_interval_s = 2u;
 }
 
-enum class counter_type_t : unsigned {
+enum class aggregate_t : unsigned {
         instant,   // treat value `as is`
         aggregate, // isolate returns accumalated value on each request (ioread, etc)
 };
@@ -44,7 +44,7 @@ struct worker_metrics_t {
     struct counter_metric_t {
         using value_type = std::uint64_t;
 
-        counter_type_t type;
+        aggregate_t type;
         metrics::shared_metric<std::atomic<value_type>> value;
         value_type delta; // if is_accumulated = true then delta = value - prev(value), used for app-wide aggration
     };
@@ -71,7 +71,7 @@ struct metrics_aggregate_proxy_t {
     struct counter_metric_t {
         using value_type = worker_metrics_t::counter_metric_t::value_type;
         // TODO: union?
-        counter_type_t type;
+        aggregate_t type;
         value_type values; // summation of worker_metrics values
         value_type deltas; // summation of worker_metrics deltas
     };
@@ -93,14 +93,12 @@ class metrics_retriever_t :
 public:
     using stats_table_type = std::unordered_map<std::string, worker_metrics_t>;
 private:
-    using pool_type = engine_t::pool_type;
-
     context_t& context;
 
     asio::deadline_timer metrics_poll_timer;
     std::shared_ptr<api::isolate_t> isolate;
 
-    synchronized<engine_t::pool_type>& pool;
+    const engine_t& parent_engine;
 
     const std::unique_ptr<cocaine::logging::logger_t> log;
 
@@ -138,7 +136,7 @@ public:
         context_t& ctx,
         const std::string& name,
         std::shared_ptr<api::isolate_t> isolate,
-        synchronized<engine_t::pool_type>& pool,
+        const engine_t& parent_engine,
         asio::io_service& loop,
         const std::uint64_t poll_interval);
 
@@ -164,7 +162,7 @@ public:
         context_t& ctx,
         const std::string& name,
         std::shared_ptr<api::isolate_t> isolate,
-        synchronized<engine_t::pool_type>& pool,
+        const engine_t& parent_engine,
         asio::io_service& loop,
         synchronized<Observers>& observers) -> std::shared_ptr<metrics_retriever_t>;
 
@@ -172,7 +170,7 @@ public:
     ignite_poll() -> void;
 
     auto
-    make_observer() -> std::shared_ptr<pool_observer>;
+    make_observer() -> std::shared_ptr<cocaine::service::node::pool_observer>;
 
     //
     // Should be called on every pool::erase(id) invocation
@@ -210,7 +208,7 @@ private:
     };
 
     // TODO: wip, possibility of redesign
-    struct metrics_pool_observer_t : public pool_observer {
+    struct metrics_pool_observer_t : public cocaine::service::node::pool_observer {
 
         metrics_pool_observer_t(metrics_retriever_t& p) :
             parent(p)
@@ -237,7 +235,7 @@ metrics_retriever_t::make_and_ignite(
     context_t& ctx,
     const std::string& name,
     std::shared_ptr<api::isolate_t> isolate,
-    synchronized<engine_t::pool_type>& pool,
+    const engine_t& parent_engine,
     asio::io_service& loop,
     synchronized<Observers>& observers) -> std::shared_ptr<metrics_retriever_t>
 {
@@ -255,7 +253,7 @@ metrics_retriever_t::make_and_ignite(
                 ctx,
                 name,
                 std::move(isolate),
-                pool,
+                parent_engine,
                 loop,
                 poll_interval);
 

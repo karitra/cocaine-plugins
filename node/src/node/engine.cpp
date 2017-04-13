@@ -78,7 +78,7 @@ engine_t::engine_t(context_t& context,
             context,
             manifest_.name,
             isolate,
-            pool,
+            *this,
             *loop,
             observers);
     } catch(const error::repository_errors& err) {
@@ -101,6 +101,18 @@ auto engine_t::active_workers() const -> std::uint32_t {
             }
         }
         return active;
+    });
+}
+
+auto engine_t::ids_of_pool() const -> std::vector<std::string> {
+    using boost::adaptors::map_keys;
+
+    return pool.apply([](const pool_type& pool){
+        std::vector<std::string> ids;
+        ids.reserve(pool.size());
+
+        boost::copy(pool | map_keys, std::back_inserter(ids));
+        return ids;
     });
 }
 

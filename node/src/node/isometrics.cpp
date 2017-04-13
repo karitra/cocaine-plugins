@@ -2,11 +2,13 @@
 #include <cassert>
 #include <unordered_map>
 
-#include "isometrics.hpp"
-
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm.hpp>
 #include <boost/range/numeric.hpp>
+
+#include "engine.hpp"
+#include "node/pool_observer.hpp"
+#include "isometrics.hpp"
 
 // #define ISOMETRICS_DEBUG
 #undef ISOMETRICS_DEBUG
@@ -37,23 +39,23 @@ namespace conf {
     // signaling any error.
     constexpr auto missed_updates_times = 10;
 
-    const std::vector<std::pair<std::string, counter_type_t>> counter_metrics_names =
+    const std::vector<std::pair<std::string, aggregate_t>> counter_metrics_names =
     {
         // yet abstract cpu load measurement
-        {"cpu", counter_type_t::instant},
+        {"cpu", aggregate_t::instant},
 
         // memory usage (in bytes)
-        {"vms", counter_type_t::instant},
-        {"rss", counter_type_t::instant},
+        {"vms", aggregate_t::instant},
+        {"rss", aggregate_t::instant},
 
         // running times
-        {"uptime",    counter_type_t::aggregate},
-        {"user_time", counter_type_t::aggregate},
-        {"sys_time",  counter_type_t::aggregate},
+        {"uptime",    aggregate_t::aggregate},
+        {"user_time", aggregate_t::aggregate},
+        {"sys_time",  aggregate_t::aggregate},
 
         // disk io (in bytes)
-        {"ioread",  counter_type_t::aggregate},
-        {"iowrite", counter_type_t::aggregate},
+        {"ioread",  aggregate_t::aggregate},
+        {"iowrite", aggregate_t::aggregate},
 
         // TODO: network stats
 
@@ -142,7 +144,7 @@ worker_metrics_t::assign(metrics_aggregate_proxy_t&& proxy) -> void {
             dbg("preserved " << name << " : " << static_cast<int>(type));
 
             auto self_it = this->common_counters.find(name);
-            if (self_it != std::end(this->common_counters) && type == counter_type_t::instant) {
+            if (self_it != std::end(this->common_counters) && type == aggregate_t::instant) {
                     self_it->second.value->store(0);
             }
         }
@@ -158,10 +160,10 @@ worker_metrics_t::assign(metrics_aggregate_proxy_t&& proxy) -> void {
                 auto& self_record = self_it->second;
 
                 switch (self_record.type) {
-                    case counter_type_t::aggregate:
+                    case aggregate_t::aggregate:
                         self_record.value->fetch_add(proxy_record.deltas);
                         break;
-                    case counter_type_t::instant:
+                    case aggregate_t::instant:
                         self_record.value->store(proxy_record.values);
                         break;
                 }
@@ -329,7 +331,7 @@ private:
                     auto& record = r->second;
                     const auto& incoming_value = metric.second.as_uint();
 
-                    if (record.type == counter_type_t::aggregate) {
+                    if (record.type == aggregate_t::aggregate) {
                         const auto& current = record.value->load();
                         if (incoming_value >= current) {
                             record.delta = incoming_value - current;
@@ -408,13 +410,13 @@ metrics_retriever_t::metrics_retriever_t(
     context_t& ctx,
     const std::string& name, // app name
     std::shared_ptr<api::isolate_t> isolate,
-    synchronized<engine_t::pool_type>& pool,
+    const engine_t& engine,
     asio::io_service& loop,
     const std::uint64_t poll_interval) :
         context(ctx),
         metrics_poll_timer(loop),
         isolate(std::move(isolate)),
-        pool(pool),
+        parent_engine(engine),
         log(ctx.log(format("{}/workers_metrics", name))),
         self_metrics(ctx, "node.isolate.poll.metrics"),
         app_name(name),
@@ -446,8 +448,6 @@ metrics_retriever_t::add_post_mortem(const std::string& id) -> void {
 
 auto
 metrics_retriever_t::poll_metrics(const std::error_code& ec) -> void {
-    using boost::adaptors::map_keys;
-
     if (ec) {
         // cancelled
         COCAINE_LOG_WARNING(log, "workers metrics polling was cancelled");
@@ -459,15 +459,9 @@ metrics_retriever_t::poll_metrics(const std::error_code& ec) -> void {
         return;
     }
 
-    auto alive_uuids = pool.apply([] (const engine_t::pool_type& pool) {
-        std::vector<std::string> alive;
-        alive.reserve(pool.size());
+    auto alive_uuids = parent_engine.ids_of_pool();
 
-        boost::copy(pool | map_keys, std::back_inserter(alive));
-        return alive;
-    });
-
-    DBG_DUMP_UUIDS(std::cerr, "metrics.pool", alive_uuids);
+    DBG_DUMP_UUIDS(std::cerr, "metrics.of_pool", alive_uuids);
 
 #ifdef ISOMETRICS_DEBUG
     purgatory.apply([&](const purgatory_pot_type& pot) {
