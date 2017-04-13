@@ -7,8 +7,8 @@
 #include <boost/range/numeric.hpp>
 
 #include "engine.hpp"
-#include "node/pool_observer.hpp"
 #include "isometrics.hpp"
+#include "node/pool_observer.hpp"
 
 // #define ISOMETRICS_DEBUG
 #undef ISOMETRICS_DEBUG
@@ -398,9 +398,10 @@ worker_metrics_t::worker_metrics_t(context_t& ctx, const std::string& app_name, 
 {}
 
 metrics_retriever_t::self_metrics_t::self_metrics_t(context_t& ctx, const std::string& pfx) :
-   uuid_requested{detail::make_uint_counter(ctx, pfx, "uuid_requested")},
-   uuid_recieved{detail::make_uint_counter(ctx, pfx, "uuid_recieved")},
+   uuids_requested{detail::make_uint_counter(ctx, pfx, "uuids.requested")},
+   uuids_recieved{detail::make_uint_counter(ctx, pfx, "uuids.recieved")},
    requests_send{detail::make_uint_counter(ctx, pfx, "requests")},
+   requests_passed{detail::make_uint_counter(ctx, pfx, "requests.passed")},
    responses_received{detail::make_uint_counter(ctx, pfx, "responses")},
    receive_errors{detail::make_uint_counter(ctx, pfx, "recieve.errors")},
    posmortem_queue_size{detail::make_uint_counter(ctx, pfx, "postmortem.queue.size")}
@@ -410,7 +411,7 @@ metrics_retriever_t::metrics_retriever_t(
     context_t& ctx,
     const std::string& name, // app name
     std::shared_ptr<api::isolate_t> isolate,
-    const engine_t& engine,
+    const std::shared_ptr<engine_t>& engine,
     asio::io_service& loop,
     const std::uint64_t poll_interval) :
         context(ctx),
@@ -454,12 +455,17 @@ metrics_retriever_t::poll_metrics(const std::error_code& ec) -> void {
         return;
     }
 
+    std::shared_ptr<engine_t> parent = parent_engine.lock();
+    if (!parent) {
+        return;
+    }
+
     if (!isolate) {
         ignite_poll();
         return;
     }
 
-    auto alive_uuids = parent_engine.ids_of_pool();
+    auto alive_uuids = parent->pooled_workers_ids();
 
     DBG_DUMP_UUIDS(std::cerr, "metrics.of_pool", alive_uuids);
 
@@ -486,9 +492,18 @@ metrics_retriever_t::poll_metrics(const std::error_code& ec) -> void {
 
     DBG_DUMP_UUIDS(std::cerr, "query array", query_array);
 
-    dynamic_t::object_t query;
-    query["uuids"] = query_array;
-    isolate->metrics(query, std::make_shared<metrics_handle_t>(shared_from_this()));
+#if 0
+    query_array.emplace_back("DEADBEEF-0001-0001-0001-000000000001");
+    query_array.emplace_back("C0C0C042-0042-0042-0042-000000000042");
+#endif
+
+    // TODO: should we send empty query as some kind of heartbeat?
+    if (query_array.empty()) {
+        self_metrics.requests_passed->fetch_add(1);
+    } else {
+        isolate->metrics(query_array, std::make_shared<metrics_handle_t>(shared_from_this()));
+        self_metrics.requests_send->fetch_add(1);
+    }
 
     // At this point query is posted and we have gathered uuids of available
     // (alived, pooled) workers and dead recently workers, so we can clear
@@ -510,8 +525,7 @@ metrics_retriever_t::poll_metrics(const std::error_code& ec) -> void {
     });
 
     // Update self stat
-    self_metrics.uuid_requested->fetch_add(query_array.size());
-    self_metrics.requests_send->fetch_add(1);
+    self_metrics.uuids_requested->fetch_add(query_array.size());
 
     ignite_poll();
 }
@@ -551,7 +565,7 @@ metrics_retriever_t::metrics_handle_t::on_data(const dynamic_t& data) -> void {
         return processed_count;
     });
 
-    parent->self_metrics.uuid_recieved->fetch_add(processed_count);
+    parent->self_metrics.uuids_recieved->fetch_add(processed_count);
     parent->self_metrics.responses_received->fetch_add(1);
 
     if (processor.has_errors()) {

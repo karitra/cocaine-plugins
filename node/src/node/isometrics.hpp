@@ -29,7 +29,7 @@ namespace node {
 class engine_t;
 
 namespace conf {
-    constexpr auto metrics_poll_interval_s = 2u;
+    constexpr auto metrics_poll_interval_s = 3u;
 }
 
 enum class aggregate_t : unsigned {
@@ -98,7 +98,7 @@ private:
     asio::deadline_timer metrics_poll_timer;
     std::shared_ptr<api::isolate_t> isolate;
 
-    const engine_t& parent_engine;
+    std::weak_ptr<engine_t> parent_engine;
 
     const std::unique_ptr<cocaine::logging::logger_t> log;
 
@@ -117,9 +117,10 @@ private:
     synchronized<stats_table_type> metrics;
 
     struct self_metrics_t {
-        metrics::shared_metric<std::atomic<std::uint64_t>> uuid_requested;
-        metrics::shared_metric<std::atomic<std::uint64_t>> uuid_recieved;
+        metrics::shared_metric<std::atomic<std::uint64_t>> uuids_requested;
+        metrics::shared_metric<std::atomic<std::uint64_t>> uuids_recieved;
         metrics::shared_metric<std::atomic<std::uint64_t>> requests_send;
+        metrics::shared_metric<std::atomic<std::uint64_t>> requests_passed;
         metrics::shared_metric<std::atomic<std::uint64_t>> responses_received;
         metrics::shared_metric<std::atomic<std::uint64_t>> receive_errors;
         metrics::shared_metric<std::atomic<std::uint64_t>> posmortem_queue_size;
@@ -136,7 +137,7 @@ public:
         context_t& ctx,
         const std::string& name,
         std::shared_ptr<api::isolate_t> isolate,
-        const engine_t& parent_engine,
+        const std::shared_ptr<engine_t>& parent_engine,
         asio::io_service& loop,
         const std::uint64_t poll_interval);
 
@@ -162,7 +163,7 @@ public:
         context_t& ctx,
         const std::string& name,
         std::shared_ptr<api::isolate_t> isolate,
-        const engine_t& parent_engine,
+        const std::shared_ptr<engine_t>& parent_engine,
         asio::io_service& loop,
         synchronized<Observers>& observers) -> std::shared_ptr<metrics_retriever_t>;
 
@@ -235,36 +236,42 @@ metrics_retriever_t::make_and_ignite(
     context_t& ctx,
     const std::string& name,
     std::shared_ptr<api::isolate_t> isolate,
-    const engine_t& parent_engine,
+    const std::shared_ptr<engine_t>& parent_engine,
     asio::io_service& loop,
     synchronized<Observers>& observers) -> std::shared_ptr<metrics_retriever_t>
 {
+    if (!isolate) {
+        throw error_t(cocaine::error::component_not_registered, "isolate daemon object wasn't provided");
+    }
+
     // TODO: node service can be set with another name
     const auto node_config = ctx.config().component_group("services").get("node");
 
-    if (node_config && isolate) {
+    if (node_config) {
         const auto args = node_config->args().as_object();
 
         const auto& should_start = args.at("isolate_metrics", false).as_bool();
         const auto& poll_interval = args.at("isolate_metrics_poll_period_s", conf::metrics_poll_interval_s).as_uint();
 
-        if (should_start) {
-            auto retriever = std::make_shared<metrics_retriever_t>(
-                ctx,
-                name,
-                std::move(isolate),
-                parent_engine,
-                loop,
-                poll_interval);
-
-            observers->emplace_back(retriever->make_observer());
-            retriever->ignite_poll();
-
-            return retriever;
+        if (!should_start) {
+            throw error_t(cocaine::error::component_not_registered, "'isolate_metrics' wasn't set in config");
         }
+
+        auto retriever = std::make_shared<metrics_retriever_t>(
+            ctx,
+            name,
+            std::move(isolate),
+            parent_engine,
+            loop,
+            poll_interval);
+
+        observers->emplace_back(retriever->make_observer());
+        retriever->ignite_poll();
+
+        return retriever;
     }
 
-    throw error::component_not_found;
+    throw error_t(cocaine::error::component_not_found, "node server config section wasn't found");
 }
 
 }  // namespace node
