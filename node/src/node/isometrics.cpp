@@ -1,6 +1,8 @@
 #include <tuple>
 #include <cassert>
 #include <unordered_map>
+#include <vector>
+#include <string>
 
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm.hpp>
@@ -16,7 +18,7 @@
 // TODO: deprecated
 #ifdef ISOMETRICS_DEBUG
 #define dbg(msg) std::cerr << msg << '\n'
-#define DBG_DUMP_UUIDS(os, logo, container) aux::dump_uuids(os, logo, container)
+#define DBG_DUMP_UUIDS(os, logo, container) detail::dump_uuids(os, logo, container)
 #else
 #define dbg(msg)
 #define DBG_DUMP_UUIDS(os, logo, container)
@@ -58,7 +60,6 @@ namespace conf {
         {"iowrite", aggregate_t::aggregate},
 
         // TODO: network stats
-
     };
 }
 
@@ -84,8 +85,8 @@ namespace detail {
     auto
     dump_uuids(std::ostream& os, const std::string& logo, const Container& arr) -> void {
         os << logo << " size " << arr.size() << '\n';
-        for(const auto& uuid : arr) {
-            os << "\tuuid: " << uuid_value(uuid) << '\n';
+        for(const auto& id : arr) {
+            os << "\tuuid: " << uuid_value(id) << '\n';
         }
     }
 
@@ -173,10 +174,12 @@ worker_metrics_t::assign(metrics_aggregate_proxy_t&& proxy) -> void {
     }
 }
 
-// TODO: error messages processing
 struct response_processor_t {
     using stats_table_type = metrics_retriever_t::stats_table_type;
     using faded_update_mapping_type = std::unordered_map<std::string, std::chrono::seconds>;
+
+    using response_type = api::metrics_handle_base_t::response_type;
+    using metrics_mapping_type = response_type::mapped_type::mapped_type;
 
     struct error_t {
         long code;
@@ -188,77 +191,64 @@ struct response_processor_t {
     {}
 
     auto
-    operator()(context_t& ctx, const dynamic_t& response, stats_table_type& stats_table,
+    operator()(context_t& ctx, const response_type& response, stats_table_type& stats_table,
         const std::chrono::seconds& faded_timeout) -> size_t
     {
         return process(ctx, response, stats_table, faded_timeout);
     }
 
     auto
-    process(context_t& ctx, const dynamic_t& response, stats_table_type& stats_table,
+    process(context_t& ctx, const response_type& response, stats_table_type& stats_table,
        const std::chrono::seconds& faded_timeout) -> size_t
     {
-        const auto apps = response.as_object();
+        auto ids_processed = size_t{};
 
-        auto uuids_processed = size_t{};
+        for(const auto& worker : response) {
+            const auto& id = worker.first;
+            const auto& isolates = worker.second;
 
-        for(const auto& app : apps) {
+            if (id.empty()) {
+                dbg("[response] 'id' value is empty, ignoring");
+                continue;
+            }
 
-            // TODO: restore app_name assertion check
-            //
-            // strictly, we should have one app at all within current protocol
-            // if (app_name != app.first) {
-            //     dbg("JSON app is " << app.first);
-            //     continue;
-            // }
-
-            const auto uuids = app.second.as_object();
             const auto now = worker_metrics_t::clock_type::now();
 
-            for(const auto& item : uuids) {
-                const auto& uuid = item.first;
-                const auto& metrics = item.second.as_object();
+            for(const auto& isolate: isolates) {
+                const auto& isolate_type = isolate.first;
+                const auto& metrics      = isolate.second;
 
-                if (uuid.empty()) {
-                    dbg("[response] 'uuid' value is empty, ignoring");
-                    continue;
-                }
-
-                if (uuid == std::string("error")) {
-                    parse_error_record(metrics);
-                    continue;
-                }
-
-                auto stat_it = stats_table.find(uuid);
+                auto stat_it = stats_table.find(id);
                 if (stat_it == std::end(stats_table)) {
-                    // If isolate daemon sends us uuid we don't know about,
+                    // If isolate daemon sends us id we don't know about,
                     // add it to the stats (monitoring) table. If it was send by error, it
                     // would be removed from request list and from stats table
                     // on next poll iteration preparation.
-                    dbg("[response] inserting new metrics record with uuid" << uuid);
-                    std::tie(stat_it, std::ignore) = stats_table.emplace(uuid, worker_metrics_t{ctx, app_name, uuid});
+                    dbg("[response] inserting new metrics record with id " << id);
+                    std::tie(stat_it, std::ignore) = stats_table.emplace(id, worker_metrics_t{ctx, app_name, id});
                 }
 
-                auto common_it = metrics.find("common");
-                if (common_it == std::end(metrics)) {
-                    dbg("[response] no `common` section");
+                if (isolate_type == std::string("common") ||
+                    isolate_type == std::string("mock_isolate"))
+                {
+                    const auto& updated_count = this->fill_metrics(metrics, stat_it->second.common_counters);
+
+                    if (updated_count) {
+                        stat_it->second.update_stamp = now;
+                    } else {
+                        const auto& update_span = now - stat_it->second.update_stamp;
+                        if (update_span > faded_timeout) {
+                            faded.emplace(id, std::chrono::duration_cast<std::chrono::seconds>(update_span));
+                        }
+                    }
+                } else if (isolate_type == std::string("error")) {
+                    parse_error_record(metrics);
                     continue;
                 }
-
-                const auto& updated_count = this->fill_metrics(common_it->second.as_object(), stat_it->second.common_counters);
-
-                if (updated_count) {
-                    stat_it->second.update_stamp = now;
-                } else {
-                    const auto& update_span = now - stat_it->second.update_stamp;
-                    if (update_span > faded_timeout) {
-                        faded.emplace(uuid, std::chrono::duration_cast<std::chrono::seconds>(update_span));
-                    }
-                }
             }
-        }
+        } // for worker
 
-        return uuids_processed;
+        return ids_processed;
     }
 
     auto
@@ -289,27 +279,36 @@ struct response_processor_t {
 private:
 
     auto
-    parse_error_record(const dynamic_t::object_t& metrics) -> void {
-        const auto& error_message = metrics.at("error.message", "none").as_string();
-        const auto& error_code    = metrics.at("error.code", 0).as_int();
+    parse_error_record(const metrics_mapping_type& error_record) -> void {
+        auto error_message = std::string{};
+        auto error_code = int{};
 
-        isolate_errors.emplace_back(error_t{error_code, error_message});
+        try {
+            auto it = error_record.find("what");
+            if (it != std::end(error_record)) {
+                error_message = it->second.as_string();
+            }
 
-        dbg("[response] got an error: " << error_message << " code: " << error_code);
+            it = error_record.find("code");
+            if (it != std::end(error_record)) {
+                error_code = it->second.as_int();
+            }
+
+            isolate_errors.push_back(error_t{error_code, error_message});
+            dbg("[response] got an error message: " << error_message << " code: " << error_code);
+        } catch (const boost::bad_get& bg) {
+            // ignore
+            dbg("[response] error message parsing error: " << error_message << " code: " << error_code);
+        }
     }
 
     auto
-    fill_metrics(const dynamic_t::object_t& metrics, worker_metrics_t::counters_table_type& result) -> size_t {
-
+    fill_metrics(const metrics_mapping_type& metrics, worker_metrics_t::counters_table_type& result) -> size_t {
         auto updated = size_t{};
-
-        if (metrics.count("error.message")) {
-            parse_error_record(metrics);
-            return updated;
-        }
 
         for(const auto& metric : metrics) {
             const auto& name = metric.first;
+            const auto& value = metric.second;
 
             dbg("[response] metrics name: " << name);
 
@@ -322,28 +321,31 @@ private:
                 continue;
             }
 
+            auto r = result.find(nm);
+            if (r == std::end(result)) {
+                continue;
+            }
+
+            // we are interested in this metrics, its name was registered
+            dbg("[response] found metrics record for " << nm << ", updating...");
+
             try {
-                auto r = result.find(nm);
-                if (r != std::end(result)) {
-                    // we are interested in this metrics, its name was registered
-                    dbg("[response] found metrics record for " << nm << ", updating...");
+                auto& record = r->second;
+                const auto& incoming_value = value.as_uint();
 
-                    auto& record = r->second;
-                    const auto& incoming_value = metric.second.as_uint();
+                dbg("[response] incoming_value " << incoming_value);
 
-                    if (record.type == aggregate_t::aggregate) {
-                        const auto& current = record.value->load();
-                        if (incoming_value >= current) {
-                            record.delta = incoming_value - current;
-                        } // else: client misbehavior, shouldn't try to store negative deltas
-                    }
-
-                    record.value->store(incoming_value);
-                    ++updated;
+                if (record.type == aggregate_t::aggregate) {
+                    const auto& current = record.value->load();
+                    if (incoming_value >= current) {
+                        record.delta = incoming_value - current;
+                    } // else: client misbehavior, shouldn't try to store negative deltas
                 }
 
-            } catch (const boost::bad_get& e) {
-                dbg("[response] parsing exception: " << e.what());
+                record.value->store(incoming_value);
+                ++updated;
+            } catch (const boost::bad_get& err) {
+                dbg("[response] exception " << err.what());
                 continue;
             }
         } // for each metric
@@ -401,7 +403,7 @@ metrics_retriever_t::self_metrics_t::self_metrics_t(context_t& ctx, const std::s
    uuids_requested{detail::make_uint_counter(ctx, pfx, "uuids.requested")},
    uuids_recieved{detail::make_uint_counter(ctx, pfx, "uuids.recieved")},
    requests_send{detail::make_uint_counter(ctx, pfx, "requests")},
-   requests_passed{detail::make_uint_counter(ctx, pfx, "requests.passed")},
+   empty_requests{detail::make_uint_counter(ctx, pfx, "empty.requests")},
    responses_received{detail::make_uint_counter(ctx, pfx, "responses")},
    receive_errors{detail::make_uint_counter(ctx, pfx, "recieve.errors")},
    posmortem_queue_size{detail::make_uint_counter(ctx, pfx, "postmortem.queue.size")}
@@ -475,8 +477,8 @@ metrics_retriever_t::poll_metrics(const std::error_code& ec) -> void {
     });
 #endif
 
-    dynamic_t::array_t query_array;
-    query_array.reserve(alive_uuids.size() + purgatory->size());
+    std::vector<std::string> query;
+    query.reserve(alive_uuids.size() + purgatory->size());
 
     // Note: it is promised by devs that active list should be quite
     // small ~ hundreds of workers, so it seems reasonable to pay a little for
@@ -485,25 +487,25 @@ metrics_retriever_t::poll_metrics(const std::error_code& ec) -> void {
     boost::sort(alive_uuids);
 
     purgatory.apply([&](purgatory_pot_type& pot) {
-        boost::set_union(alive_uuids, pot, std::back_inserter(query_array));
+        boost::set_union(alive_uuids, pot, std::back_inserter(query));
         pot.clear();
         self_metrics.posmortem_queue_size->store(0);
     });
 
-    DBG_DUMP_UUIDS(std::cerr, "query array", query_array);
-
 #if 0
-    query_array.emplace_back("DEADBEEF-0001-0001-0001-000000000001");
-    query_array.emplace_back("C0C0C042-0042-0042-0042-000000000042");
+    query.emplace_back("DEADBEEF-0001-0001-0001-000000000001");
+    query.emplace_back("C0C0C042-0042-0042-0042-000000000042");
 #endif
 
+    DBG_DUMP_UUIDS(std::cerr, "query array", query);
+
     // TODO: should we send empty query as some kind of heartbeat?
-    if (query_array.empty()) {
-        self_metrics.requests_passed->fetch_add(1);
-    } else {
-        isolate->metrics(query_array, std::make_shared<metrics_handle_t>(shared_from_this()));
-        self_metrics.requests_send->fetch_add(1);
+    if (query.empty()) {
+        self_metrics.empty_requests->fetch_add(1);
     }
+
+    isolate->metrics(query, std::make_shared<metrics_handle_t>(shared_from_this()));
+    self_metrics.requests_send->fetch_add(1);
 
     // At this point query is posted and we have gathered uuids of available
     // (alived, pooled) workers and dead recently workers, so we can clear
@@ -512,8 +514,8 @@ metrics_retriever_t::poll_metrics(const std::error_code& ec) -> void {
     preserved_metrics.reserve(metrics->size());
 
     metrics.apply([&](stats_table_type& table) {
-        for(const auto to_preserve : query_array) {
-            const auto it = table.find(to_preserve.as_string());
+        for(const auto& to_preserve : query) {
+            const auto it = table.find(to_preserve);
 
             if (it != std::end(table)) {
                 preserved_metrics.emplace(std::move(*it));
@@ -525,7 +527,7 @@ metrics_retriever_t::poll_metrics(const std::error_code& ec) -> void {
     });
 
     // Update self stat
-    self_metrics.uuids_requested->fetch_add(query_array.size());
+    self_metrics.uuids_requested->fetch_add(query.size());
 
     ignite_poll();
 }
@@ -538,14 +540,12 @@ metrics_retriever_t::make_observer() -> std::shared_ptr<pool_observer> {
 //// metrics_handle_t //////////////////////////////////////////////////////////
 
 auto
-metrics_retriever_t::metrics_handle_t::on_data(const dynamic_t& data) -> void {
+metrics_retriever_t::metrics_handle_t::on_data(const response_type& data) -> void {
     using namespace boost::adaptors;
 
     assert(parent);
 
     dbg("metrics_handle_t:::on_data");
-    dbg("[response] get json: " << boost::lexical_cast<std::string>(data) << '\n');
-
     COCAINE_LOG_DEBUG(parent->log, "processing isolation metrics response");
 
     const auto faded_timeout = std::chrono::seconds(parent->poll_interval.total_seconds() * conf::missed_updates_times);
@@ -581,10 +581,10 @@ metrics_retriever_t::metrics_handle_t::on_data(const dynamic_t& data) -> void {
     }
 
     for(const auto& faded : processor.faded_updates()) {
-        const auto& uuid = faded.first;
+        const auto& id = faded.first;
         const auto& duration = faded.second;
 
-        COCAINE_LOG_WARNING(parent->log, "no isolate metrics for active worker {} for {} second(s)", uuid, duration.count());
+        COCAINE_LOG_WARNING(parent->log, "no isolate metrics for active worker {} for {} second(s)", id, duration.count());
     }
 }
 

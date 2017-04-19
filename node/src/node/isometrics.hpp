@@ -120,7 +120,7 @@ private:
         metrics::shared_metric<std::atomic<std::uint64_t>> uuids_requested;
         metrics::shared_metric<std::atomic<std::uint64_t>> uuids_recieved;
         metrics::shared_metric<std::atomic<std::uint64_t>> requests_send;
-        metrics::shared_metric<std::atomic<std::uint64_t>> requests_passed;
+        metrics::shared_metric<std::atomic<std::uint64_t>> empty_requests;
         metrics::shared_metric<std::atomic<std::uint64_t>> responses_received;
         metrics::shared_metric<std::atomic<std::uint64_t>> receive_errors;
         metrics::shared_metric<std::atomic<std::uint64_t>> posmortem_queue_size;
@@ -195,12 +195,14 @@ private:
     // TODO: wip, possibility of redesign
     struct metrics_handle_t : public api::metrics_handle_base_t
     {
+        using response_type = api::metrics_handle_base_t::response_type;
+
         metrics_handle_t(std::shared_ptr<metrics_retriever_t> parent) :
             parent{parent}
         {}
 
         auto
-        on_data(const dynamic_t& data) -> void override;
+        on_data(const response_type& data) -> void override;
 
         auto
         on_error(const std::error_code&, const std::string& what) -> void override;

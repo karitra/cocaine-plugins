@@ -15,6 +15,7 @@
 #include <cocaine/traits/dynamic.hpp>
 #include <cocaine/traits/endpoint.hpp>
 #include <cocaine/traits/vector.hpp>
+#include <cocaine/traits/map.hpp>
 
 #include <blackhole/logger.hpp>
 #include <asio/ip/tcp.hpp>
@@ -174,12 +175,12 @@ struct metrics_load_t {
     std::shared_ptr<external_t::inner_t> inner;
     std::shared_ptr<api::metrics_handle_base_t> handle;
 
-    dynamic_t query;
+    std::vector<std::string> query;
 
     io::upstream_ptr_t stream;
 
     metrics_load_t(std::shared_ptr<external_t::inner_t> _inner,
-                   const dynamic_t& _query,
+                   const std::vector<std::string>& _query,
                    std::shared_ptr<api::metrics_handle_base_t> _handle
     ) :
         inner(std::move(_inner)),
@@ -483,7 +484,7 @@ external_t::spawn(const std::string& path,
 }
 
 void
-external_t::metrics(const dynamic_t& query, std::shared_ptr<api::metrics_handle_base_t> handle) const {
+external_t::metrics(const std::vector<std::string>& query, std::shared_ptr<api::metrics_handle_base_t> handle) const {
 
     auto load = std::make_shared<metrics_load_t>(inner, query, handle);
 
