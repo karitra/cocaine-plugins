@@ -16,12 +16,5 @@ namespace cocaine { namespace unicat {
     using entity_type = std::tuple<std::string, boost::optional<std::string>, std::string>;
     // <service name, entity as above>
     using uri_type = std::pair<std::string, std::string>;
-
-    // struct uri_hash {
-    //     auto operator()(const uri_type& uri) const -> size_t {
-    //         return  std::hash<std::string>{}(uri.first) ^
-    //                 std::hash<std::string>{}(uri.second);
-    //     }
-    // };
 }
 }

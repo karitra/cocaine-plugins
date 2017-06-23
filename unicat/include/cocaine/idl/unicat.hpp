@@ -40,6 +40,8 @@ struct unicat {
         }
 
         using argument_type = common_arguments_type;
+
+        // typedef void upstream_type;
     };
 
     // Unset specified rights from existent one
@@ -52,6 +54,8 @@ struct unicat {
         }
 
         using argument_type = common_arguments_type;
+
+        // typedef void upstream_type;
     };
 
     // Requires R access to acl table(s).

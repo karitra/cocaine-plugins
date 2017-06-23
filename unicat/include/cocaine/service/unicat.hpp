@@ -12,8 +12,6 @@ namespace cocaine {
 namespace service {
 
 class unicat_t : public api::service_t, public dispatch<io::unicat_tag> {
-    struct impl_t;
-    std::shared_ptr<impl_t> pimpl;
 public:
     unicat_t(context_t& context, asio::io_service& asio, const std::string& name, const dynamic_t& args);
 

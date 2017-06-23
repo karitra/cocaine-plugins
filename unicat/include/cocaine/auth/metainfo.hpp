@@ -1,12 +1,14 @@
 #pragma once
 
+#include <cocaine/auth/uid.hpp>
+
 #include "cocaine/traits/enum.hpp"
 #include "cocaine/traits/map.hpp"
 #include "cocaine/traits/tuple.hpp"
 
 #include <boost/mpl/list.hpp>
 
-// TODO: taken from private core, should be moved into core source tree as
+// TODO: taken from private core, should be moved into 'core' source tree as
 //       public interface someday
 namespace cocaine { namespace auth {
 
@@ -21,6 +23,12 @@ namespace cocaine { namespace auth {
             return c_perms.empty() && u_perms.empty();
         }
     };
+
+    template<typename Event>
+    auto
+    alter(auth::metainfo_t& metainfo,
+        const std::vector<cid_t>& cids, const std::vector<uid_t>& uids, const auth::flags_t flags) -> void;
+
 }}
 
 namespace cocaine {

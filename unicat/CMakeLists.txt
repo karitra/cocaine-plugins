@@ -8,8 +8,9 @@ ADD_LIBRARY(unicat MODULE
     src/backends/unicorn
     src/backends/storage
     src/unicat
+    src/metainfo
     src/module)
-    
+
 
 TARGET_LINK_LIBRARIES(unicat
     blackhole
