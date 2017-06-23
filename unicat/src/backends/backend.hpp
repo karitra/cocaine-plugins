@@ -97,6 +97,9 @@ private:
     std::tuple<Args...> args;
 };
 
+//
+// TODO: not tested at all, born ugly!
+//
 template<typename Event, typename License, typename... Args>
 auto
 async_verify(License&& license, Args&&... args) -> std::future<bool>

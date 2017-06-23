@@ -15,6 +15,7 @@ namespace detail {
 storage_backend_t::storage_backend_t(const options_t& options) :
     backend_t(options),
     backend(api::storage(options.ctx_ref, options.name)),
+    // TODO: incorrect backend name
     license(api::authorization::storage(options.ctx_ref, options.name))
 {}
 

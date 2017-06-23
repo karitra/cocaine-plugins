@@ -1,3 +1,9 @@
+//
+// TODO:
+//   - not tested at all
+//   - value version supprt
+//   - ensure correct rights assigment to various (malfunctional) paths
+//
 #pragma once
 
 #include <string>
@@ -30,6 +36,19 @@ struct unicat {
         auth::flags_t                               // (4) bitmask of rights: None - 0, R - 1, W - 2, ALL - 3,
     >::type;
 
+    // Create rights ACL record for specified entity.
+    // Requires RW access to acl table(s).
+    // Not implemented.
+    struct create {
+        typedef unicat_tag tag;
+
+        static constexpr const char* alias() noexcept {
+            return "create";
+        }
+
+        using argument_type = common_arguments_type;
+    };
+
     // Set specified rights in addition to existent one
     // Requires RW access to acl table(s).
     struct grant {
@@ -40,8 +59,6 @@ struct unicat {
         }
 
         using argument_type = common_arguments_type;
-
-        // typedef void upstream_type;
     };
 
     // Unset specified rights from existent one
@@ -54,8 +71,6 @@ struct unicat {
         }
 
         using argument_type = common_arguments_type;
-
-        // typedef void upstream_type;
     };
 
     // Requires R access to acl table(s).
@@ -104,6 +119,7 @@ struct protocol<unicat_tag> {
     typedef boost::mpl::int_<1>::type version;
 
     typedef boost::mpl::list<
+        unicat::create,
         unicat::grant,
         unicat::revoke,
         unicat::view,
