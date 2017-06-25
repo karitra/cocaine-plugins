@@ -22,6 +22,7 @@
 #include "cocaine/detail/forwards.hpp"
 #include "cocaine/context.hpp"
 
+#include "backends/backend.hpp"
 #include "backends/fabric.hpp"
 
 namespace cocaine {
@@ -74,6 +75,42 @@ namespace detail {
                 entity);
         }
     }
+
+    template<typename Deferred, typename Log>
+    auto
+    abort_deferred(Deferred defered, Log&& log, const std::string& log_message, const std::string& deferred_message) -> void {
+        // TODO: Refactor
+    }
+
+    template<typename R>
+    auto
+    unpack(const std::string& blob) -> R {
+        R result;
+        msgpack::unpacked unpacked;
+
+        msgpack::unpack(&unpacked, blob.data(), blob.size());
+        io::type_traits<R>::unpack(unpacked.get(), result);
+        return result;
+    }
+
+    template<typename R>
+    auto
+    unpack(const unicorn::versioned_value_t value) -> R {
+        R result;
+        if (value.exists()) {
+            if (!value.value().convertible_to<R>()) {
+                // Such error code make sense only in unicat context, should be less
+                // specific in general case.
+                throw std::system_error(make_error_code(error::invalid_acl_framing));
+            }
+
+            result = value.value().to<R>();
+        }
+
+        return result;
+    }
+
+
 } // detail
 
 template<typename Event>
@@ -87,6 +124,76 @@ struct alter_slot_t :
 
     context_t& ctx;
     std::shared_ptr<logging::logger_t> log;
+
+    struct on_write_t : unicat::async::write_handler_t {
+        std::shared_ptr<std::promise<void>> completion;
+
+        on_write_t(std::shared_ptr<std::promise<void>> completion) :
+            completion(completion)
+        {}
+
+        virtual auto on_write(std::future<void>) -> void override {
+            on_done();
+        }
+
+        virtual auto on_write(std::future<api::unicorn_t::response::put>) -> void {
+            on_done();
+        }
+
+    private:
+        auto on_done() -> void {
+            // TODO: better logging
+            // TODO: signal via deferred?
+            completion->set_value();
+        }
+    };
+
+    struct on_read_t : unicat::async::read_handler_t {
+        using deferred_type = deferred<typename result_of<Event>::type>;
+
+        std::shared_ptr<cu::backend_t> backend;
+        deferred_type result;
+        const std::string entity;
+        auth::alter_data_t alter_data;
+        std::shared_ptr<std::promise<void>> promise;
+
+        on_read_t(
+            std::shared_ptr<cu::backend_t> backend,
+            deferred_type result,
+            const std::string& entity,
+            auth::alter_data_t alter_data,
+            std::shared_ptr<std::promise<void>> promise) :
+                backend(std::move(backend)),
+                result(std::move(result)),
+                entity(entity),
+                alter_data(std::move(alter_data)),
+                promise(std::move(promise))
+        {}
+
+        auto on_read(std::future<std::string> fut) -> void override {
+            on_read(detail::unpack<auth::metainfo_t>(fut.get()));
+        }
+
+        auto on_read(std::future<unicorn::versioned_value_t> fut) -> void override {
+            on_read(detail::unpack<auth::metainfo_t>(fut.get()));
+        }
+
+    private:
+
+        auto on_read(auth::metainfo_t metainfo) -> void {
+            auth::alter<Event>(metainfo, alter_data);
+            backend->async_verify_write(entity,
+                [=] (std::error_code ec) {
+                    if (ec) {
+                        detail::abort_deferred(result, backend->logger(),
+                            "failed to complete 'write' operation", "Permission denied");
+                        return;
+                    }
+
+                    backend->async_write_metainfo(entity, metainfo, std::make_shared<on_write_t>(promise));
+            });
+        }
+    };
 
     alter_slot_t(context_t& ctx, const std::string& name) :
         ctx(ctx),
@@ -103,15 +210,21 @@ struct alter_slot_t :
         const auto& uids = std::get<2>(args);
         const auto& flags = std::get<3>(args);
 
+        auth::alter_data_t alter_data{cids, uids, flags};
+
+        deferred<typename result_of<Event>::type> deferred;
+
         COCAINE_LOG_INFO(log, "alter slot with cids {} and uids {} set flags {}",
             cids, uids, flags);
 
         // detail::log_requested_entities(log, entities);
 
-        const auto identity = cocaine::auth::identity_t::builder_t()
+        auto identity = cocaine::auth::identity_t::builder_t()
             .cids(cids)
             .uids(uids)
             .build();
+
+        std::vector<std::future<void>> completions;
 
         for(const auto& it: detail::separate_by_scheme(entities)) {
             const auto& scheme = it.first;
@@ -127,34 +240,28 @@ struct alter_slot_t :
                 auto backend = cu::fabric::make_backend(scheme,
                     cu::backend_t::options_t{ctx, name, identity, log});
 
-                using read_future_type = std::future<auth::metainfo_t>;
-                using named_future_type = std::pair<std::string, read_future_type>;
-                std::vector<named_future_type> read_futures;
+                auto promise = std::make_shared<std::promise<void>>();
+                completions.push_back(promise->get_future());
 
-                for(const auto& entity : entities) {
-                    COCAINE_LOG_DEBUG(log, "reading metainfo for '{}'", entity);
+                for(const auto entity : entities) {
+                    backend->async_verify_read(entity, [=] (std::error_code ec) {
+                        if (ec) {
+                            detail::abort_deferred(deferred, backend->logger(),
+                            "failed to complete 'read' operation", "Permission denied");
+                            return;
+                        }
 
-                    // TODO: better interface to ensure verification
-                    backend->template verify_rights<Event>(entity);
-                    read_futures.emplace_back(entity, backend->read_metainfo(entity));
+                        backend->async_read_metainfo(entity,
+                            std::make_shared<on_read_t>(backend, deferred, entity, alter_data, promise));
+                    });
                 }
 
-                std::vector<std::future<void>> write_futures;
-                for(auto& result : read_futures) {
-                    auto& entity = result.first;
-                    auto& rd_fut = result.second;
-
-                    auto metainfo = rd_fut.get();
-                    cocaine::auth::alter<Event>(metainfo, cids, uids, flags);
-
-                    COCAINE_LOG_DEBUG(log, "writing metainfo back for '{}'", entity);
-                    write_futures.emplace_back(backend->write_metainfo(entity, metainfo));
-                }
-
-                wait_all(std::move(write_futures));
             } // for services
         } // for schemes
 
+        wait_all(completions);
+
+        // TODO:
         upstream.template send<typename protocol::value>();
         COCAINE_LOG_DEBUG(log, "completed altering");
         return boost::none;
@@ -174,10 +281,9 @@ struct alter_slot_t :
         return boost::none;
     }
 
-    template<typename Container>
-    auto
-    wait_all(Container&& container) -> void {
-        for(auto& fut : container) {
+    template<typename Completions>
+    auto wait_all(Completions&& completions) -> void {
+        for(auto& fut : completions) {
             fut.get();
         }
     }

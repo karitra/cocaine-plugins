@@ -1,6 +1,12 @@
 #pragma once
 
+#include <map>
+#include <vector>
+
 #include <cocaine/auth/uid.hpp>
+
+#include <cocaine/dynamic.hpp>
+#include <cocaine/dynamic/converters.hpp>
 
 #include "cocaine/traits/enum.hpp"
 #include "cocaine/traits/map.hpp"
@@ -24,11 +30,20 @@ namespace cocaine { namespace auth {
         }
     };
 
+    struct alter_data_t {
+        std::vector<auth::cid_t> cids;
+        std::vector<auth::uid_t> uids;
+        auth::flags_t flags;
+
+        auto
+        make_identity() -> auth::identity_t {
+            return auth::identity_t::builder_t().cids(cids).uids(uids).build();
+        }
+    };
+
     template<typename Event>
     auto
-    alter(auth::metainfo_t& metainfo,
-        const std::vector<cid_t>& cids, const std::vector<uid_t>& uids, const auth::flags_t flags) -> void;
-
+    alter(auth::metainfo_t& metainfo, const alter_data_t& data) -> void;
 }}
 
 namespace cocaine {
@@ -56,4 +71,56 @@ struct type_traits<auth::metainfo_t> {
 };
 
 } // namespace io
+} // namespace cocaine
+
+// Namespace section copy-pasted form uncorn plugin:
+// unicorn/src/authorization/unicorn.cpp
+namespace cocaine {
+
+template<>
+struct dynamic_converter<auth::metainfo_t> {
+    using result_type = auth::metainfo_t;
+
+    using underlying_type = std::tuple<
+        std::map<auth::cid_t, auth::flags_t>,
+        std::map<auth::uid_t, auth::flags_t>
+    >;
+
+    static
+    result_type
+    convert(const dynamic_t& from) {
+        auto& tuple = from.as_array();
+        if (tuple.size() != 2) {
+            throw std::bad_cast();
+        }
+
+        return result_type{
+            dynamic_converter::convert<auth::cid_t, auth::flags_t>(tuple.at(0)),
+            dynamic_converter::convert<auth::uid_t, auth::flags_t>(tuple.at(1)),
+        };
+    }
+
+    static
+    bool
+    convertible(const dynamic_t& from) {
+        return from.is_array() && from.as_array().size() == 2;
+    }
+
+private:
+    // TODO: Temporary until `dynamic_t` teaches how to convert into maps with non-string keys.
+    template<typename K, typename T>
+    static
+    std::map<K, auth::flags_t>
+    convert(const dynamic_t& from) {
+        std::map<K, auth::flags_t> result;
+        const dynamic_t::object_t& object = from.as_object();
+
+        for(auto it = object.begin(); it != object.end(); ++it) {
+            result.insert(std::make_pair(boost::lexical_cast<K>(it->first), it->second.to<T>()));
+        }
+
+        return result;
+    }
+};
+
 } // namespace cocaine

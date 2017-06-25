@@ -16,5 +16,7 @@ namespace cocaine { namespace unicat {
     using entity_type = std::tuple<std::string, boost::optional<std::string>, std::string>;
     // <service name, entity as above>
     using uri_type = std::pair<std::string, std::string>;
+
+    class backend_t;
 }
 }

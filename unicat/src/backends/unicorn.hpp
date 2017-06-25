@@ -12,15 +12,15 @@ namespace cocaine { namespace unicat {
 
 class unicorn_backend_t : public backend_t {
     api::unicorn_ptr backend;
-    std::shared_ptr<api::authorization::unicorn_t> license;
+    std::shared_ptr<api::authorization::unicorn_t> access;
 public:
     explicit unicorn_backend_t(const options_t& options);
 
-    auto read_metainfo(const std::string& entity) -> std::future<auth::metainfo_t> override;
-    auto write_metainfo(const std::string& entity, auth::metainfo_t& meta) -> std::future<void> override;
-private:
-    auto check_write(const std::string& entity) -> std::future<bool> override;
-    auto check_read(const std::string& entity) -> std::future<bool> override;
+    auto async_verify_read(const std::string& entity, async::verify_handler_t) -> void override;
+    auto async_verify_write(const std::string& entity, async::verify_handler_t) -> void override;
+
+    auto async_read_metainfo(const std::string& entity, std::shared_ptr<async::read_handler_t>) -> void override;
+    auto async_write_metainfo(const std::string& entity, const auth::metainfo_t& meta, std::shared_ptr<async::write_handler_t>) -> void override;
 };
 
 }
