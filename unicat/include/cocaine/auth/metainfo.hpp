@@ -2,6 +2,7 @@
 
 #include <map>
 #include <vector>
+#include <iostream>
 
 #include <cocaine/auth/uid.hpp>
 
@@ -29,6 +30,8 @@ namespace cocaine { namespace auth {
             return c_perms.empty() && u_perms.empty();
         }
     };
+
+    auto operator<<(std::ostream& os, const metainfo_t& meta) -> std::ostream&;
 
     struct alter_data_t {
         std::vector<auth::cid_t> cids;

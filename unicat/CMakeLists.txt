@@ -1,5 +1,6 @@
 INCLUDE_DIRECTORIES(
 ${PROJECT_SOURCE_DIR}/unicat/include
+${PROJECT_SOURCE_DIR}/unicorn/include
 ${PROJECT_SOURCE_DIR}/unicat/src)
 
 ADD_LIBRARY(unicat MODULE

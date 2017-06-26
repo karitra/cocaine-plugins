@@ -33,7 +33,7 @@ struct unicat {
         std::vector<cocaine::unicat::entity_type>,  // (1) entities in tuple:  (scheme, uri)
         std::vector<auth::cid_t>,                   // (2) array of client ids
         std::vector<auth::uid_t>,                   // (3) array of user ids
-        auth::flags_t                               // (4) bitmask of rights: None - 0, R - 1, W - 2, ALL - 3,
+        auth::flags_t                               // (4) access bitmask: None - 0, R - 1, W - 2, ALL - 3,
     >::type;
 
     // Create rights ACL record for specified entity.

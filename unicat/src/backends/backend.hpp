@@ -27,8 +27,8 @@ namespace cocaine { namespace unicat {
 namespace async {
 
 struct read_handler_t {
-    virtual auto on_read(std::future<std::string>) -> void = 0;
     virtual auto on_read(std::future<unicorn::versioned_value_t>) -> void = 0;
+    virtual auto on_read(std::future<auth::metainfo_t>) -> void = 0;
 
     virtual ~read_handler_t() = default;
 };

@@ -38,16 +38,18 @@ auto
 storage_backend_t::async_read_metainfo(const std::string& entity, std::shared_ptr<async::read_handler_t> hnd) -> void
 {
     BOOST_ASSERT(backend);
-    return backend->read(detail::ACL_COLLECTION, entity, [=] (std::future<std::string> fut) {
-        hnd->on_read(std::move(fut));
-    });
+    return backend->get<auth::metainfo_t>(detail::ACL_COLLECTION, entity,
+        [=] (std::future<auth::metainfo_t> fut) {
+            hnd->on_read(std::move(fut));
+        }
+    );
 }
 
 auto
 storage_backend_t::async_write_metainfo(const std::string& entity, const auth::metainfo_t& meta, std::shared_ptr<async::write_handler_t> hnd) -> void
 {
     BOOST_ASSERT(backend);
-    return backend->write(detail::ACL_COLLECTION, entity, "meta" /* TODO */, detail::COLLECTION_ACLS_TAGS,
+    return backend->put(detail::ACL_COLLECTION, entity, meta, detail::COLLECTION_ACLS_TAGS,
         [=] (std::future<void> fut) {
             hnd->on_write(std::move(fut));
         }

@@ -4,6 +4,7 @@
 #include <boost/assert.hpp>
 
 #include "cocaine/idl/unicorn.hpp"
+
 #include "unicorn.hpp"
 
 namespace cocaine { namespace unicat {

@@ -25,6 +25,13 @@
 #include "backends/backend.hpp"
 #include "backends/fabric.hpp"
 
+#if 0
+#include <iostream>
+#define dbg(msg) std::cerr << msg << '\n'
+#else
+#define dbg(msg)
+#endif
+
 namespace cocaine {
 namespace service {
 
@@ -78,19 +85,9 @@ namespace detail {
 
     template<typename Deferred, typename Log>
     auto
-    abort_deferred(Deferred defered, Log&& log, const std::string& log_message, const std::string& deferred_message) -> void {
+    abort_deferred(Deferred&& defered, Log&& log, const std::string& log_message, const std::string& deferred_message) -> void {
         // TODO: Refactor
-    }
-
-    template<typename R>
-    auto
-    unpack(const std::string& blob) -> R {
-        R result;
-        msgpack::unpacked unpacked;
-
-        msgpack::unpack(&unpacked, blob.data(), blob.size());
-        io::type_traits<R>::unpack(unpacked.get(), result);
-        return result;
+        defered.set_value();
     }
 
     template<typename R>
@@ -109,8 +106,6 @@ namespace detail {
 
         return result;
     }
-
-
 } // detail
 
 template<typename Event>
@@ -132,19 +127,24 @@ struct alter_slot_t :
             completion(completion)
         {}
 
-        virtual auto on_write(std::future<void>) -> void override {
-            on_done();
+        virtual auto on_write(std::future<void> fut) -> void override {
+            on_done(std::move(fut));
         }
 
-        virtual auto on_write(std::future<api::unicorn_t::response::put>) -> void {
-            on_done();
+        virtual auto on_write(std::future<api::unicorn_t::response::put> fut) -> void {
+            on_done(std::move(fut));
         }
 
     private:
-        auto on_done() -> void {
-            // TODO: better logging
-            // TODO: signal via deferred?
-            completion->set_value();
+        template<typename F>
+        auto on_done(std::future<F> fut) -> void {
+            try {
+                fut.get();
+                completion->set_value();
+            } catch(...) {
+                // Can also throw!
+                completion->set_exception(std::current_exception());
+            }
         }
     };
 
@@ -152,44 +152,52 @@ struct alter_slot_t :
         using deferred_type = deferred<typename result_of<Event>::type>;
 
         std::shared_ptr<cu::backend_t> backend;
-        deferred_type result;
         const std::string entity;
         auth::alter_data_t alter_data;
         std::shared_ptr<std::promise<void>> promise;
 
         on_read_t(
             std::shared_ptr<cu::backend_t> backend,
-            deferred_type result,
             const std::string& entity,
             auth::alter_data_t alter_data,
             std::shared_ptr<std::promise<void>> promise) :
                 backend(std::move(backend)),
-                result(std::move(result)),
                 entity(entity),
                 alter_data(std::move(alter_data)),
                 promise(std::move(promise))
         {}
 
-        auto on_read(std::future<std::string> fut) -> void override {
-            on_read(detail::unpack<auth::metainfo_t>(fut.get()));
+        // TODO: looks like code repetition, refactor.
+        auto on_read(std::future<unicorn::versioned_value_t> fut) -> void override {
+            try {
+                on_read(detail::unpack<auth::metainfo_t>(fut.get()));
+            } catch(...) {
+                promise->set_exception(std::current_exception());
+            }
         }
 
-        auto on_read(std::future<unicorn::versioned_value_t> fut) -> void override {
-            on_read(detail::unpack<auth::metainfo_t>(fut.get()));
+        auto on_read(std::future<auth::metainfo_t> fut) -> void override {
+            try {
+                on_read(fut.get());
+            } catch(...) {
+                promise->set_exception(std::current_exception());
+            }
         }
 
     private:
-
         auto on_read(auth::metainfo_t metainfo) -> void {
+            dbg("before alter. flags: " << alter_data.flags);
+            dbg("before alter. meta: " << metainfo);
             auth::alter<Event>(metainfo, alter_data);
+            dbg("after alter meta: " << metainfo);
+
             backend->async_verify_write(entity,
                 [=] (std::error_code ec) {
                     if (ec) {
-                        detail::abort_deferred(result, backend->logger(),
+                        detail::abort_deferred(*promise, backend->logger(),
                             "failed to complete 'write' operation", "Permission denied");
                         return;
                     }
-
                     backend->async_write_metainfo(entity, metainfo, std::make_shared<on_write_t>(promise));
             });
         }
@@ -212,7 +220,7 @@ struct alter_slot_t :
 
         auth::alter_data_t alter_data{cids, uids, flags};
 
-        deferred<typename result_of<Event>::type> deferred;
+        // deferred<typename result_of<Event>::type> deferred;
 
         COCAINE_LOG_INFO(log, "alter slot with cids {} and uids {} set flags {}",
             cids, uids, flags);
@@ -240,19 +248,20 @@ struct alter_slot_t :
                 auto backend = cu::fabric::make_backend(scheme,
                     cu::backend_t::options_t{ctx, name, identity, log});
 
-                auto promise = std::make_shared<std::promise<void>>();
-                completions.push_back(promise->get_future());
-
                 for(const auto entity : entities) {
+
+                    auto promise = std::make_shared<std::promise<void>>();
+                    completions.push_back(promise->get_future());
+
                     backend->async_verify_read(entity, [=] (std::error_code ec) {
                         if (ec) {
-                            detail::abort_deferred(deferred, backend->logger(),
-                            "failed to complete 'read' operation", "Permission denied");
+                            detail::abort_deferred(*promise, backend->logger(),
+                                "failed to complete 'read' operation", "Permission denied");
                             return;
                         }
 
                         backend->async_read_metainfo(entity,
-                            std::make_shared<on_read_t>(backend, deferred, entity, alter_data, promise));
+                            std::make_shared<on_read_t>(backend, entity, alter_data, promise));
                     });
                 }
 
@@ -261,7 +270,7 @@ struct alter_slot_t :
 
         wait_all(completions);
 
-        // TODO:
+        // TODO
         upstream.template send<typename protocol::value>();
         COCAINE_LOG_DEBUG(log, "completed altering");
         return boost::none;
