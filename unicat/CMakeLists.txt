@@ -12,7 +12,6 @@ ADD_LIBRARY(unicat MODULE
     src/metainfo
     src/module)
 
-
 TARGET_LINK_LIBRARIES(unicat
     blackhole
     cocaine-core
@@ -29,7 +28,6 @@ INSTALL(TARGETS unicat
     COMPONENT runtime)
 
 INSTALL(
-    DIRECTORY
-        include/cocaine/idl
+    DIRECTORY include/cocaine/idl
     DESTINATION include/cocaine
     COMPONENT development)

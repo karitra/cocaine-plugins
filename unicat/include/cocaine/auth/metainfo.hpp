@@ -19,6 +19,7 @@
 //       public interface someday
 namespace cocaine { namespace auth {
 
+    // TODO: Would be CRUD permissions more approppriate and generic?
     enum flags_t : std::size_t { none = 0x00, read = 0x01, write = 0x02, both = read | write };
 
     struct metainfo_t {
@@ -32,6 +33,18 @@ namespace cocaine { namespace auth {
     };
 
     auto operator<<(std::ostream& os, const metainfo_t& meta) -> std::ostream&;
+
+    // TODO: refactor out all 'stub' stuff, it is temporary, used because dynamic_t
+    //       doesn't support non-strign keys yet.
+    //
+    // persistent metainfo representation, different in key types
+    struct metainfo_dynamic_stub_t {
+        std::map<std::string, flags_t> c_perms;
+        std::map<std::string, flags_t> u_perms;
+    };
+
+    auto stub_from_meta(const metainfo_t& meta) -> metainfo_dynamic_stub_t;
+    auto meta_from_stub(const metainfo_dynamic_stub_t& meta) -> metainfo_t;
 
     struct alter_data_t {
         std::vector<auth::cid_t> cids;
@@ -47,7 +60,8 @@ namespace cocaine { namespace auth {
     template<typename Event>
     auto
     alter(auth::metainfo_t& metainfo, const alter_data_t& data) -> void;
-}}
+} // auth
+} // cocaine
 
 namespace cocaine {
 namespace io {
@@ -55,21 +69,24 @@ namespace io {
 template<>
 struct type_traits<auth::metainfo_t> {
     typedef boost::mpl::list<
-        std::map<auth::cid_t, auth::flags_t>,
-        std::map<auth::uid_t, auth::flags_t>
+        std::map<std::string, auth::flags_t>,
+        std::map<std::string, auth::flags_t>
     > underlying_type;
 
     template<class Stream>
     static
     void
-    pack(msgpack::packer<Stream>& target, const auth::metainfo_t& source) {
+    pack(msgpack::packer<Stream>& target, const auth::metainfo_t& meta) {
+        auto source = stub_from_meta(meta);
         type_traits<underlying_type>::pack(target, source.c_perms, source.u_perms);
     }
 
     static
     void
     unpack(const msgpack::object& source, auth::metainfo_t& target) {
-        type_traits<underlying_type>::unpack(source, target.c_perms, target.u_perms);
+        auto stub = auth::metainfo_dynamic_stub_t{};
+        type_traits<underlying_type>::unpack(source, stub.c_perms, stub.u_perms);
+        target = meta_from_stub(stub);
     }
 };
 

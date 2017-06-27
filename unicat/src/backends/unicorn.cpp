@@ -1,11 +1,28 @@
+//
+// All prefix correctness checks are done by unicorn backend,
+// unicat is just a dummy proxy!
+//
 #include <cocaine/format.hpp>
 #include <cocaine/errors.hpp>
 
 #include <boost/assert.hpp>
 
+#include <blackhole/logger.hpp>
+#include <blackhole/scope/holder.hpp>
+#include <blackhole/wrapper.hpp>
+
+#include <cocaine/logging.hpp>
+
 #include "cocaine/idl/unicorn.hpp"
 
 #include "unicorn.hpp"
+
+#if 0
+#include <iostream>
+#define dbg(msg) std::cerr << msg << '\n'
+#else
+#define dbg(msg)
+#endif
 
 namespace cocaine { namespace unicat {
 
@@ -24,16 +41,24 @@ namespace detail {
 unicorn_backend_t::unicorn_backend_t(const options_t& options) :
     backend_t(options),
     backend(api::unicorn(options.ctx_ref, options.name)),
-    // TODO: incorrect backend name
     access(api::authorization::unicorn(options.ctx_ref, options.name))
-{}
+{
+    dbg("backend born\n");
+    COCAINE_LOG_DEBUG(this->logger(), "unicat::unicorn backend started '{}'", this->get_options().name);
+}
+
+unicorn_backend_t::~unicorn_backend_t()
+{
+    dbg("backend dead\n");
+    COCAINE_LOG_DEBUG(this->logger(), "unicat::unicorn backend detached '{}'", this->get_options().name);
+}
 
 auto
 unicorn_backend_t::async_verify_read(const std::string& entity, async::verify_handler_t hnd) -> void
 {
     BOOST_ASSERT(access);
     return async::verify<io::unicorn::get>(
-        *access, std::move(hnd), cocaine::format("{}/{}", entity, detail::ACL_NODE), get_options().identity_ref);
+        *access, hnd, cocaine::format("{}/{}", entity, detail::ACL_NODE), *hnd.identity);
 }
 
 auto
@@ -41,32 +66,46 @@ unicorn_backend_t::async_verify_write(const std::string& entity, async::verify_h
 {
     BOOST_ASSERT(access);
     return async::verify<io::unicorn::put>(
-        *access, std::move(hnd), cocaine::format("{}/{}", entity, detail::ACL_NODE), get_options().identity_ref);
+        *access, hnd, cocaine::format("{}/{}", entity, detail::ACL_NODE), *hnd.identity);
 }
 
 auto
 unicorn_backend_t::async_read_metainfo(const std::string& entity, std::shared_ptr<async::read_handler_t> hnd) -> void
 {
     BOOST_ASSERT(backend);
-    backend->get(
+    COCAINE_LOG_DEBUG(this->logger(), "unicat::unicorn read metainfo for {}", cocaine::format("{}/{}", entity, detail::ACL_NODE));
+    dbg("before get " << cocaine::format("{}/{}", entity, detail::ACL_NODE));
+
+    auto scope = backend->get(
         [=] (std::future<unicorn::versioned_value_t> fut) {
+            dbg("async on_read\n");
             hnd->on_read(std::move(fut));
+            hnd->detach_scope();
         },
         cocaine::format("{}/{}", entity, detail::ACL_NODE));
+    hnd->attach_scope(std::move(scope));
+    dbg("after get\n");
 }
 
 auto
-unicorn_backend_t::async_write_metainfo(const std::string& entity, const auth::metainfo_t& meta, std::shared_ptr<async::write_handler_t> hnd) -> void
+unicorn_backend_t::async_write_metainfo(const std::string& entity, const version_t version, const auth::metainfo_t& meta, std::shared_ptr<async::write_handler_t> hnd) -> void
 {
     BOOST_ASSERT(backend);
-    backend->put(
+    COCAINE_LOG_DEBUG(this->logger(), "unicat::unicorn writing metainfo for {}", cocaine::format("{}/{}", entity, detail::ACL_NODE));
+
+    using namespace auth;
+    dbg("writing version " << version << " for meta:\n" << meta);
+    auto scope = backend->put(
         [=] (std::future<api::unicorn_t::response::put> fut) {
+            dbg("async on_write\n");
             hnd->on_write(std::move(fut));
+            hnd->detach_scope();
         },
         cocaine::format("{}/{}", entity, detail::ACL_NODE),
         detail::make_dynamic_from_meta(meta),
-        // TODO: make real object verson, if it exist!
-        unicorn::version_t{});
+        version);
+
+    hnd->attach_scope(std::move(scope));
 }
 
 }

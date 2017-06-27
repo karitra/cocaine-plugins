@@ -1,4 +1,9 @@
+#include <blackhole/logger.hpp>
+#include <blackhole/scope/holder.hpp>
+#include <blackhole/wrapper.hpp>
+
 #include <cocaine/idl/storage.hpp>
+#include <cocaine/logging.hpp>
 
 #include <boost/assert.hpp>
 
@@ -15,23 +20,28 @@ namespace detail {
 storage_backend_t::storage_backend_t(const options_t& options) :
     backend_t(options),
     backend(api::storage(options.ctx_ref, options.name)),
-    // TODO: incorrect backend name
     access(api::authorization::storage(options.ctx_ref, options.name))
-{}
+{
+    COCAINE_LOG_DEBUG(this->logger(), "unicat::storage backend started '{}'", this->get_options().name);
+}
+
+storage_backend_t::~storage_backend_t() {
+    COCAINE_LOG_DEBUG(this->logger(), "unicat::storage backend detached '{}'", this->get_options().name);
+}
 
 auto
 storage_backend_t::async_verify_read(const std::string& entity, async::verify_handler_t hnd) -> void
 {
     BOOST_ASSERT(access);
     return async::verify<io::storage::read>(
-        *access, std::move(hnd), detail::ACL_COLLECTION, entity, get_options().identity_ref);
+        *access, hnd, detail::ACL_COLLECTION, entity, *hnd.identity);
 }
 auto
 storage_backend_t::async_verify_write(const std::string& entity, async::verify_handler_t hnd) -> void
 {
     BOOST_ASSERT(access);
     return async::verify<io::storage::write>(
-        *access, std::move(hnd), detail::ACL_COLLECTION, entity, get_options().identity_ref);
+        *access, hnd, detail::ACL_COLLECTION, entity, *hnd.identity);
 }
 
 auto
@@ -46,7 +56,7 @@ storage_backend_t::async_read_metainfo(const std::string& entity, std::shared_pt
 }
 
 auto
-storage_backend_t::async_write_metainfo(const std::string& entity, const auth::metainfo_t& meta, std::shared_ptr<async::write_handler_t> hnd) -> void
+storage_backend_t::async_write_metainfo(const std::string& entity, const version_t, const auth::metainfo_t& meta, std::shared_ptr<async::write_handler_t> hnd) -> void
 {
     BOOST_ASSERT(backend);
     return backend->put(detail::ACL_COLLECTION, entity, meta, detail::COLLECTION_ACLS_TAGS,

@@ -14,8 +14,6 @@ namespace cocaine { namespace unicat {
     // (1) service: system wide name, if empty it is equal to scheme
     // (2) entity: path to entity - storage collection, unicorn prefix, etc.
     using entity_type = std::tuple<std::string, boost::optional<std::string>, std::string>;
-    // <service name, entity as above>
-    using uri_type = std::pair<std::string, std::string>;
 
     class backend_t;
 }

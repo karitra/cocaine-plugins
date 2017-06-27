@@ -24,40 +24,65 @@
 
 namespace cocaine { namespace unicat {
 
+using version_t = unicorn::version_t;
+
 namespace async {
 
-struct read_handler_t {
+// Used in unicorn backend reincarnation for scope management.
+struct scope_ctl_t {
+    auto attach_scope(api::unicorn_scope_ptr s) -> void {
+        scope = s;
+    }
+
+    auto detach_scope() -> void {
+        if (scope) {
+            scope->close();
+            scope = nullptr;
+        }
+    }
+
+    virtual ~scope_ctl_t() {
+        this->detach_scope();
+    }
+
+    api::unicorn_scope_ptr scope;
+};
+
+struct read_handler_t : scope_ctl_t {
     virtual auto on_read(std::future<unicorn::versioned_value_t>) -> void = 0;
     virtual auto on_read(std::future<auth::metainfo_t>) -> void = 0;
 
     virtual ~read_handler_t() = default;
 };
 
-struct write_handler_t {
+struct write_handler_t : scope_ctl_t {
     virtual auto on_write(std::future<void>) -> void = 0;
     virtual auto on_write(std::future<api::unicorn_t::response::put>) -> void = 0;
 
     virtual ~write_handler_t() = default;
 };
 
-using verify_handler_t = std::function<void(std::error_code)>;
+struct verify_handler_t {
+    const std::shared_ptr<const auth::identity_t> identity;
+    std::function<void(std::error_code)> func;
+
+    auto operator()(std::error_code ec) -> void {
+        return func(ec);
+    }
+};
 
 template<typename Event, typename Access, typename... Args>
 auto
 verify(Access&& access, verify_handler_t hnd, Args&&... args) -> void {
-    return access.template verify<Event>(std::forward<Args>(args)..., std::move(hnd));
+    return access.template verify<Event>(std::forward<Args>(args)..., hnd);
 }
 } // async
 
 class backend_t {
 public:
-    ///
-    /// Common 'backends' options comes here.
-    ///
     struct options_t {
         context_t& ctx_ref;
         std::string name; // service name
-        const auth::identity_t& identity_ref;
         std::shared_ptr<logging::logger_t> log;
     };
 
@@ -67,11 +92,12 @@ public:
     auto logger() -> std::shared_ptr<logging::logger_t>;
     auto get_options() -> options_t;
 
+    // Verify handlers should store identity
     virtual auto async_verify_read(const std::string& entity, async::verify_handler_t) -> void = 0;
     virtual auto async_verify_write(const std::string& entity, async::verify_handler_t) -> void = 0;
 
     virtual auto async_read_metainfo(const std::string& entity, std::shared_ptr<async::read_handler_t>) -> void = 0;
-    virtual auto async_write_metainfo(const std::string& entity, const auth::metainfo_t& meta, std::shared_ptr<async::write_handler_t>) -> void = 0;
+    virtual auto async_write_metainfo(const std::string& entity, const version_t, const auth::metainfo_t& meta, std::shared_ptr<async::write_handler_t>) -> void = 0;
 private:
     options_t options;
 };

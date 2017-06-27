@@ -1,3 +1,5 @@
+#include <boost/range/algorithm/transform.hpp>
+
 #include "cocaine/auth/metainfo.hpp"
 #include "cocaine/idl/unicat.hpp"
 
@@ -8,23 +10,7 @@
 #endif
 
 namespace cocaine { namespace auth {
-
-auto operator<<(std::ostream& os, const metainfo_t& meta) -> std::ostream&
-{
-   os << "cids:\n";
-   for(const auto& cid : meta.c_perms) {
-       os << "  " << cid.first << " : " << cid.second << '\n';
-   }
-
-   os << "uids:\n";
-   for(const auto& uid : meta.u_perms) {
-       os << "  " << uid.first << " : " << uid.second << '\n';
-   }
-
-   return os;
-}
-
-
+// TODO: unittest to all those stuff
 namespace detail {
     using base_type = std::underlying_type<auth::flags_t>::type;
 
@@ -58,8 +44,75 @@ namespace detail {
     auth::flags_t operator~(const auth::flags_t a) {
         return uint_to_flags( ~flags_to_uint(a) );
     }
+
+    template<typename T, typename DstMap>
+    auto stringify_keys(const std::map<T, auth::flags_t>& src, DstMap& dst) -> void {
+        for(const auto& el : src) {
+            dst[boost::lexical_cast<std::string>(el.first)] = el.second;
+        }
+    }
+
+    template<typename T, typename SrcMap>
+    auto digitize_keys(const SrcMap& src, std::map<T,auth::flags_t>& dst) -> void {
+        for(const auto& el : src) {
+            dst[boost::lexical_cast<T>(el.first)] = el.second;
+        }
+    }
+
+    template<typename Perms, typename ToSet>
+    auto
+    set_perms(Perms&& perms, const ToSet& to_set, const auth::flags_t flags) -> void
+    {
+        using namespace detail;
+        for(const auto& id : to_set) {
+            perms[id] |= flags;
+        }
+    }
+
+    template<typename Perms, typename ToUnset>
+    auto
+    unset_perms(Perms&& perms, const ToUnset& to_unset, const auth::flags_t flags) -> void
+    {
+        using namespace detail;
+        for(const auto& id : to_unset) {
+            auto it = perms.find(id);
+            if (it != std::end(perms)) {
+                it->second &= ~ flags;
+            }
+        }
+    }
+} // detail
+
+auto stub_from_meta(const auth::metainfo_t& meta) -> auth::metainfo_dynamic_stub_t {
+   auth::metainfo_dynamic_stub_t stub;
+   detail::stringify_keys<auth::cid_t>(meta.c_perms, stub.c_perms);
+   detail::stringify_keys<auth::uid_t>(meta.u_perms, stub.u_perms);
+   return stub;
 }
 
+auto meta_from_stub(const auth::metainfo_dynamic_stub_t& stub) -> auth::metainfo_t {
+    auth::metainfo_t meta;
+    detail::digitize_keys<auth::cid_t>(stub.c_perms, meta.c_perms);
+    detail::digitize_keys<auth::uid_t>(stub.u_perms, meta.u_perms);
+    return meta;
+}
+
+auto operator<<(std::ostream& os, const metainfo_t& meta) -> std::ostream&
+{
+   os << "cids:\n";
+   for(const auto& cid : meta.c_perms) {
+       os << "  " << cid.first << " : " << cid.second << '\n';
+   }
+
+   os << "uids:\n";
+   for(const auto& uid : meta.u_perms) {
+       os << "  " << uid.first << " : " << uid.second << '\n';
+   }
+
+   return os;
+}
+
+// TODO: check for none flags
 template<>
 auto
 alter<io::unicat::revoke>(auth::metainfo_t& metainfo, const auth::alter_data_t& data) -> void
@@ -67,22 +120,10 @@ alter<io::unicat::revoke>(auth::metainfo_t& metainfo, const auth::alter_data_t& 
     using namespace detail;
 
     dbg("unsetting flags " << data.flags);
-
-    for(const auto& cid : data.cids) {
-        dbg("removing for cid: " << cid);
-        auto it = metainfo.c_perms.find(cid);
-        if (it != std::end(metainfo.c_perms)) {
-            it->second &= ~ data.flags;
-        }
-    }
-
-    for(const auto& uid : data.uids) {
-        dbg("removing for uid: " << uid);
-        auto it = metainfo.u_perms.find(uid);
-        if (it != std::end(metainfo.u_perms)) {
-            it->second &= ~ data.flags;
-        }
-    }
+    dbg("before unset: " << metainfo);
+    unset_perms(metainfo.c_perms, data.cids, data.flags);
+    unset_perms(metainfo.u_perms, data.uids, data.flags);
+    dbg("before unset: " << metainfo);
 }
 
 template<>
@@ -92,15 +133,10 @@ alter<io::unicat::grant>(auth::metainfo_t& metainfo, const auth::alter_data_t& d
     using namespace detail;
 
     dbg("setting flags " << data.flags);
-    for(const auto& cid : data.cids) {
-        dbg("adding for cid: " << cid);
-        metainfo.c_perms[cid] |= data.flags;
-    }
-
-    for(const auto& uid : data.uids) {
-        dbg("adding for uid: " << uid);
-        metainfo.c_perms[uid] |= data.flags;
-    }
+    dbg("before set: " << metainfo);
+    set_perms(metainfo.c_perms, data.cids, data.flags);
+    set_perms(metainfo.u_perms, data.uids, data.flags);
+    dbg("after set: " << metainfo);
 }
 
 template
@@ -110,6 +146,5 @@ alter<io::unicat::grant>(auth::metainfo_t& metainfo, const auth::alter_data_t&) 
 template
 auto
 alter<io::unicat::grant>(auth::metainfo_t& metainfo, const auth::alter_data_t&) -> void;
-
 }
 }
