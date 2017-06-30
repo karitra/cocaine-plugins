@@ -11,8 +11,8 @@
 namespace cocaine { namespace unicat {
 
 class storage_backend_t : public backend_t {
-    api::storage_ptr backend;
     std::shared_ptr<api::authorization::storage_t> access;
+    api::storage_ptr backend;
 public:
     explicit storage_backend_t(const options_t& options);
     virtual ~storage_backend_t();

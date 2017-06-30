@@ -34,15 +34,10 @@ struct scope_ctl_t {
         scope = s;
     }
 
-    auto detach_scope() -> void {
+    virtual ~scope_ctl_t() {
         if (scope) {
             scope->close();
-            scope = nullptr;
         }
-    }
-
-    virtual ~scope_ctl_t() {
-        this->detach_scope();
     }
 
     api::unicorn_scope_ptr scope;

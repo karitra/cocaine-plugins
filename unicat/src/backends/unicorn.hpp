@@ -11,8 +11,8 @@
 namespace cocaine { namespace unicat {
 
 class unicorn_backend_t : public backend_t {
-    api::unicorn_ptr backend;
     std::shared_ptr<api::authorization::unicorn_t> access;
+    api::unicorn_ptr backend;
 public:
     explicit unicorn_backend_t(const options_t& options);
     virtual ~unicorn_backend_t();
