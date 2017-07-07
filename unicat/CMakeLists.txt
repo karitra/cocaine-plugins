@@ -4,10 +4,12 @@ ${PROJECT_SOURCE_DIR}/unicorn/include
 ${PROJECT_SOURCE_DIR}/unicat/src)
 
 ADD_LIBRARY(unicat MODULE
-    src/backends/fabric
-    src/backends/backend
-    src/backends/unicorn
-    src/backends/storage
+    src/backend/fabric
+    src/backend/backend
+    src/backend/unicorn
+    src/backend/storage
+    src/auth_cache
+    src/completion
     src/unicat
     src/metainfo
     src/module)

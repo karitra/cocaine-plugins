@@ -44,21 +44,22 @@ namespace detail {
 
 unicorn_backend_t::unicorn_backend_t(const options_t& options) :
     backend_t(options),
-    access(api::authorization::unicorn(options.ctx_ref, options.name)),
+    access(options.access_handlers_cache->make_handler<api::authorization::unicorn_t>(options.name)),
     backend(api::unicorn(options.ctx_ref, options.name))
 {
     COCAINE_LOG_DEBUG(this->logger(), "unicat::unicorn backend started '{}'", this->get_options().name);
+    dbg("unicorn backend is alive");
 }
 
 unicorn_backend_t::~unicorn_backend_t()
 {
     COCAINE_LOG_DEBUG(this->logger(), "unicat::unicorn backend detached '{}'", this->get_options().name);
+    dbg("unicorn backend is dead");
 }
 
 auto
 unicorn_backend_t::async_verify_read(const std::string& entity, async::verify_handler_t hnd) -> void
 {
-    BOOST_ASSERT(access);
     dbg("check read for entity: " << entity);
     return async::verify<io::unicorn::get>(*access, hnd, entity, *hnd.identity);
 }
@@ -66,7 +67,6 @@ unicorn_backend_t::async_verify_read(const std::string& entity, async::verify_ha
 auto
 unicorn_backend_t::async_verify_write(const std::string& entity, async::verify_handler_t hnd) -> void
 {
-    BOOST_ASSERT(access);
     dbg("check write for entity" << entity);
     return async::verify<io::unicorn::put>(*access, hnd, entity, *hnd.identity);
 }
@@ -74,7 +74,6 @@ unicorn_backend_t::async_verify_write(const std::string& entity, async::verify_h
 auto
 unicorn_backend_t::async_read_metainfo(const std::string& entity, std::shared_ptr<async::read_handler_t> hnd) -> void
 {
-    BOOST_ASSERT(backend);
     COCAINE_LOG_DEBUG(this->logger(), "unicat::unicorn read metainfo for {}", detail::make_acl_path(entity));
 
     dbg("before get " << detail::make_acl_path(entity));
@@ -91,7 +90,6 @@ unicorn_backend_t::async_read_metainfo(const std::string& entity, std::shared_pt
 auto
 unicorn_backend_t::async_write_metainfo(const std::string& entity, const version_t version, const auth::metainfo_t& meta, std::shared_ptr<async::write_handler_t> hnd) -> void
 {
-    BOOST_ASSERT(backend);
     COCAINE_LOG_DEBUG(this->logger(), "unicat::unicorn writing metainfo for {}", detail::make_acl_path(entity));
 
     using namespace auth;
@@ -99,7 +97,6 @@ unicorn_backend_t::async_write_metainfo(const std::string& entity, const version
 
     auto scope = backend->put(
         [=] (std::future<api::unicorn_t::response::put> fut) {
-            dbg("async on_write\n");
             hnd->on_write(std::move(fut));
         },
         detail::make_acl_path(entity),

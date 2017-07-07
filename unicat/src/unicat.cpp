@@ -22,8 +22,11 @@
 #include "cocaine/detail/forwards.hpp"
 #include "cocaine/context.hpp"
 
-#include "backends/backend.hpp"
-#include "backends/fabric.hpp"
+#include "backend/backend.hpp"
+#include "backend/fabric.hpp"
+
+#include "auth_cache.hpp"
+#include "completion.hpp"
 
 #if 0
 #include <iostream>
@@ -63,17 +66,21 @@ namespace detail {
                      [service && service->empty() == false ? *service : DEFAULT_SERVICE_NAME]
                      .push_back(entity);
         }
+
         return separated;
     }
 
     template<typename Deferred>
     auto
-    abort_deferred(std::shared_ptr<cu::backend_t>& backend, Deferred&& deferred, const std::string& log_message, const std::string& deferred_message) -> void {
+    abort_deferred(std::shared_ptr<cu::backend_t>& backend, const cu::url_t url, Deferred&& deferred, const std::string& log_message, const std::string& deferred_message) -> void {
         auto log = backend->logger();
         backend.reset();
         COCAINE_LOG_WARNING(log, "{} {}", log_message, deferred_message);
-        deferred.set_exception(std::make_exception_ptr(
-            error_t(error::permission_denied, "'{}' '{}'", log_message, deferred_message)));
+
+        auto eptr = std::make_exception_ptr(
+            error_t(error::permission_denied, "'{}' '{}'", log_message, deferred_message));
+
+        deferred.set_completion(cu::completion_t{url, std::move(eptr)});
     }
 
     template<typename R>
@@ -84,7 +91,6 @@ namespace detail {
         if (value.exists() && value.value().convertible_to<R>()) {
             return std::make_tuple(value.value().to<R>(), value.version());
         }
-
         // Such error code make sense only in unicat context, should be less
         // specific in general case.
         throw std::system_error(make_error_code(error::invalid_acl_framing));
@@ -122,10 +128,12 @@ namespace dbg {
 } // dbg
 
 struct on_write_t : unicat::async::write_handler_t {
-    std::shared_ptr<std::promise<void>> completion;
+    const cu::url_t url;
+    std::shared_ptr<cu::base_completion_state_t> completion_state;
 
-    on_write_t(std::shared_ptr<std::promise<void>> completion) :
-        completion(completion)
+    on_write_t(const cu::url_t url, std::shared_ptr<cu::base_completion_state_t> completion_state) :
+        url(url),
+        completion_state(completion_state)
     {
         dbg("on_write_t");
     }
@@ -147,33 +155,36 @@ private:
     auto on_done(std::future<R> fut) -> void {
         try {
             fut.get();
-            completion->set_value();
+            completion_state->set_completion(cu::completion_t{url});
         } catch(...) {
             // Can also throw!
-            completion->set_exception(std::current_exception());
+            completion_state->set_completion(cu::completion_t{url, std::current_exception()});
         }
     }
 };
 
 template<typename Event>
-struct on_read_t : public unicat::async::read_handler_t {
+struct on_read_t :
+    public unicat::async::read_handler_t,
+    public std::enable_shared_from_this<on_read_t<Event>>
+{
     std::shared_ptr<cu::backend_t> backend;
-    const std::string entity;
+    const cu::url_t url;
     const std::shared_ptr<auth::identity_t> identity;
     auth::alter_data_t alter_data;
-    std::shared_ptr<std::promise<void>> promise;
+    std::shared_ptr<cu::base_completion_state_t> completion_state;
 
     on_read_t(
         std::shared_ptr<cu::backend_t> backend,
-        const std::string& entity,
+        const cu::url_t url,
         const std::shared_ptr<auth::identity_t>& identity,
         auth::alter_data_t alter_data,
-        std::shared_ptr<std::promise<void>> promise) :
+        std::shared_ptr<cu::base_completion_state_t> completion_state) :
             backend(std::move(backend)),
-            entity(entity),
+            url(url),
             identity(identity),
             alter_data(std::move(alter_data)),
-            promise(std::move(promise))
+            completion_state(std::move(completion_state))
     {
         dbg("on_read_t()");
     }
@@ -203,38 +214,34 @@ struct on_read_t : public unicat::async::read_handler_t {
             on_exception(std::current_exception());
         }
     }
-
 private:
     auto on_read(auth::metainfo_t metainfo, const cu::version_t version = cocaine::unicorn::not_existing_version) -> void {
         dbg("on_read metainfo (before alter):\n" << metainfo);
         auth::alter<Event>(metainfo, alter_data);
         dbg("on_read metainfo (after alter):\n" << metainfo);
 
-        auto backend_copy = backend;
-        auto promise_copy = promise;
-        auto entity_copy = entity;
-
+        auto self = this->shared_from_this();
         auto on_verify = cu::async::verify_handler_t{
             identity,
             [=] (std::error_code ec) mutable -> void {
                 dbg("write verify error_code => " << ec);
                 if (ec) {
-                    return detail::abort_deferred(backend_copy, *promise_copy,
+                    return detail::abort_deferred(self->backend, self->url, *self->completion_state,
                         "failed to complete 'write' operation", "Permission denied");
                 }
 
-                auto on_write = std::make_shared<on_write_t>(promise_copy);
-                backend_copy->async_write_metainfo(entity_copy, version, metainfo, std::move(on_write));
+                auto on_write = std::make_shared<on_write_t>(self->url, self->completion_state);
+                self->backend->async_write_metainfo(self->url.entity, version, metainfo, std::move(on_write));
             }
         };
 
-        backend_copy->async_verify_write(entity, std::move(on_verify));
+        backend->async_verify_write(url.entity, std::move(on_verify));
     }
 
     auto on_exception(std::exception_ptr eptr) -> void {
-        dbg("on_read::on_exception for entity " << entity);
+        dbg("on_read::on_exception for entity " << url.entity);
         backend.reset();
-        promise->set_exception(std::move(eptr));
+        completion_state->set_completion(cu::completion_t{url, std::move(eptr)});
     }
 };
 
@@ -249,10 +256,13 @@ struct alter_slot_t :
     using protocol = typename io::aux::protocol_impl<typename io::event_traits<Event>::upstream_type>::type;
 
     context_t& context;
+
+    std::shared_ptr<cu::authorization::handlers_cache_t> auth_cache;
     std::shared_ptr<logging::logger_t> log;
 
-    alter_slot_t(context_t& context, const std::string& name) :
+    alter_slot_t(context_t& context, const std::string& name, std::shared_ptr<cu::authorization::handlers_cache_t> auth_cache) :
         context(context),
+        auth_cache(auth_cache),
         log(context.log("audit", {{"service", name}}))
     {}
 
@@ -271,16 +281,10 @@ struct alter_slot_t :
 
         const auto alter_data = auth::alter_data_t{cids, uids, flags};
 
-        // Store backend for later release in those thread, it helps to avoid
-        // authorization structure (within backend) to be deleted inside self
-        // executer thread due race conditions on async function exception:
-        // smart pointer to backend is held by async callback and on exception
-        // it was last owner of pointer, so backend was deleted after exit from
-        // callback thread (and in callback thread), but callback thread itself
-        // was owned by authorization which in turn was a callback holder, so it
-        // lead to 'self join exception' in thread deletion.
-        std::vector<std::shared_ptr<cu::backend_t>> basket;
-        std::vector<std::future<void>> completions;
+        auto completion_state =
+            std::make_shared<cu::async_completion_state_t<upstream_type, protocol>>(
+                upstream,
+                context.log("audit", {{"service", "unicat"}}) );
 
         for(const auto& it: detail::separate_by_scheme(entities)) {
             const auto& scheme = it.first;
@@ -299,47 +303,38 @@ struct alter_slot_t :
                 const auto identity = std::make_shared<auth::identity_t>(auth::identity_t::builder_t()
                     .cids({1,13}).uids({4,6}).build());
 #endif
-
                 auto backend = cu::fabric::make_backend(scheme,
-                    cu::backend_t::options_t{context, name, context.log("audit", {{"service", name}})}
-                );
-
-                basket.push_back(backend);
+                    cu::backend_t::options_t{
+                        context, name, context.log("audit", {{"service", name}}), auth_cache} );
 
                 for(const auto entity : entities) {
-                    auto promise = std::make_shared<std::promise<void>>();
-                    completions.push_back(promise->get_future());
-
-                    auto backend_copy = backend;
-                    auto promise_copy = promise;
+                    auto url = cu::url_t{scheme, name, entity};
 
                     auto on_verify = cu::async::verify_handler_t{
                         identity,
                         [=] (std::error_code ec) mutable -> void {
                             dbg("read verify with code " << ec);
                             if (ec) {
-                                return detail::abort_deferred(backend_copy, *promise_copy,
+                                return detail::abort_deferred(backend, url, *completion_state,
                                     "failed to complete 'read' operation", "Permission denied");
                             }
 
-                            auto on_read = std::make_shared<on_read_t<Event>>(backend_copy, entity, identity, alter_data, promise_copy);
-                            backend_copy->async_read_metainfo(entity, std::move(on_read));
+                            auto on_read = std::make_shared<on_read_t<Event>>(
+                                backend,
+                                url,
+                                identity,
+                                alter_data,
+                                completion_state);
+
+                            backend->async_read_metainfo(entity, std::move(on_read));
                         }
                     };
 
-                    backend_copy->async_verify_read(entity, std::move(on_verify));
+                    backend->async_verify_read(entity, std::move(on_verify));
                 } // for entities
             } // for services
         } // for schemes
 
-        COCAINE_LOG_DEBUG(log, "waiting for async completions...");
-        const auto exceptions = detail::wait_all(completions);
-        if (exceptions.empty() == false) {
-            dbg("async exceptions, count " << exceptions.size());
-            std::rethrow_exception(exceptions.front());
-        }
-
-        upstream.template send<typename protocol::value>();
         COCAINE_LOG_DEBUG(log, "altering completed");
         return boost::none;
     } catch(const std::system_error& err) {
@@ -371,8 +366,10 @@ unicat_t::unicat_t(context_t& context, asio::io_service& asio, const std::string
     service_t(context, asio, service_name, args),
     dispatch<io::unicat_tag>(service_name)
 {
-    bind::on_alter<io::unicat::grant>(*this, context, service_name);
-    bind::on_alter<io::unicat::revoke>(*this, context, service_name);
+    auto auth_cache = std::make_shared<cu::authorization::handlers_cache_t>(context);
+
+    bind::on_alter<io::unicat::grant>(*this, context, service_name, auth_cache);
+    bind::on_alter<io::unicat::revoke>(*this, context, service_name, auth_cache);
 }
 
 }  // namespace service

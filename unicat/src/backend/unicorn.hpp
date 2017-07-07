@@ -4,7 +4,7 @@
 #include <future>
 
 #include <cocaine/api/unicorn.hpp>
-#include <cocaine/api/authorization/unicorn.hpp>
+#include <cocaine/api/executor.hpp>
 
 #include "backend.hpp"
 

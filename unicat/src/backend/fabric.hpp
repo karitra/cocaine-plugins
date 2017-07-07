@@ -14,6 +14,12 @@ enum class scheme_t : unsigned {
     schemes_count
 };
 
+struct url_t {
+    scheme_t scheme;
+    std::string service_name;
+    std::string entity;
+};
+
 scheme_t scheme_from_string(const std::string& scheme);
 std::string scheme_to_string(const scheme_t);
 

@@ -22,6 +22,8 @@
 #include "cocaine/detail/forwards.hpp"
 #include "cocaine/auth/metainfo.hpp"
 
+#include "auth_cache.hpp"
+
 namespace cocaine { namespace unicat {
 
 using version_t = unicorn::version_t;
@@ -79,6 +81,7 @@ public:
         context_t& ctx_ref;
         std::string name; // service name
         std::shared_ptr<logging::logger_t> log;
+        std::shared_ptr<authorization::handlers_cache_t> access_handlers_cache;
     };
 
     explicit backend_t(const options_t& options);

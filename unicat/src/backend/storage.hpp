@@ -4,7 +4,6 @@
 #include <future>
 
 #include <cocaine/api/storage.hpp>
-#include <cocaine/api/authorization/storage.hpp>
 
 #include "backend.hpp"
 

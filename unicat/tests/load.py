@@ -3,6 +3,8 @@ from tornado import ioloop
 
 from cocaine.services import Service
 from cocaine.exceptions import ServiceError
+from cocaine.exceptions import DisconnectionError
+
 
 @gen.coroutine
 def grant(srv, urls, cids, uids, flags):
@@ -73,6 +75,37 @@ if __name__ == '__main__':
         ('storage', '', 't1')
     ]
 
+    # while(True):
+    #     try:
+    #         ioloop.IOLoop.current().run_sync(lambda: test_alter(unicat, items))
+    #     except DisconnectionError as err:
+    #         print("service disconnected {}".format(err))
+    #         continue
+    #     except ServiceError as err:
+    #         print("service error {}".format(err))
+
     ioloop.IOLoop.current().run_sync(lambda: test_alter(unicat, items))
+
+    print('Testing alter methods for non-existent unicorn and storage items...')
+
+    items = [
+        # Note: contains duplicate!
+        ('unicorn', '', '/z1.broken'),
+        ('unicorn', '', '/z2.broken'),
+        ('unicorn', '', '/z2.broken'),
+        ('storage', '', 't1.broken'),
+        ('storage', '', 't2.broken'),
+        ('storage', '', 't3.broken'),
+        ('storage', '', 't1.broken')
+    ]
+
+    # Warning: a lot of exceptions output, should be controlled by CLI flags someday
+    try:
+        ioloop.IOLoop.current().run_sync(lambda: test_alter(unicat, items))
+    except ServiceError as err:
+        # TODO: compare error
+        print('Expected errors')
+
+    # TODO: test for different service namings
 
     print('\nDone.\nHave a nice day!')
