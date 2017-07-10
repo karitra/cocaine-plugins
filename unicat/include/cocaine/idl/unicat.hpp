@@ -8,11 +8,16 @@
 #include <cocaine/auth/uid.hpp>
 #include <cocaine/rpc/protocol.hpp>
 
-#include <cocaine/detail/forwards.hpp>
-
 #include <boost/mpl/list.hpp>
 
 #include "cocaine/auth/metainfo.hpp"
+
+#include "boost/optional.hpp"
+
+namespace cocaine { namespace unicat {
+    using entity_type = std::tuple<std::string, boost::optional<std::string>, std::string>;
+}
+}
 
 namespace cocaine {
 namespace io {

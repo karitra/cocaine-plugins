@@ -16,6 +16,7 @@ ADD_LIBRARY(unicat MODULE
 
 TARGET_LINK_LIBRARIES(unicat
     blackhole
+    msgpack
     cocaine-core
     cocaine-io-util
     ${Boost_LIBRARIES})

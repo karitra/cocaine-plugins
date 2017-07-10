@@ -25,11 +25,7 @@ namespace detail {
 }
 
 struct completion_t final {
-    enum Opcode {
-        Nop,
-        ReadOp,
-        WriteOp
-    };
+    enum Opcode { Nop, ReadOp, WriteOp };
 
     url_t url;
 
@@ -87,17 +83,13 @@ struct async_completion_state_t : public base_completion_state_t {
             std::vector<std::string> errors;
 
             for(auto& comp : state) {
-                // TODO: better error case separation: exception or error_code
-                //       by authorization::verify handler
                 if (comp.has_error()) {
-                    if (comp.has_error_code()) {
-                        errors.push_back(comp.make_access_error());
-                        continue;
-                    }
-
                     errors.push_back(comp.make_exception_error());
+                } else if (comp.has_error_code()) {
+                    errors.push_back(comp.make_access_error());
                 }
             }
+
             return errors;
         });
 

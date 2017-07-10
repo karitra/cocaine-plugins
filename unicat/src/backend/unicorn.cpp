@@ -17,13 +17,6 @@
 
 #include "unicorn.hpp"
 
-#if 0
-#include <iostream>
-#define dbg(msg) std::cerr << msg << '\n'
-#else
-#define dbg(msg)
-#endif
-
 namespace cocaine { namespace unicat {
 
 namespace detail {
@@ -48,26 +41,22 @@ unicorn_backend_t::unicorn_backend_t(const options_t& options) :
     backend(api::unicorn(options.ctx_ref, options.name))
 {
     COCAINE_LOG_DEBUG(this->logger(), "unicat::unicorn backend started '{}'", this->get_options().name);
-    dbg("unicorn backend is alive");
 }
 
 unicorn_backend_t::~unicorn_backend_t()
 {
     COCAINE_LOG_DEBUG(this->logger(), "unicat::unicorn backend detached '{}'", this->get_options().name);
-    dbg("unicorn backend is dead");
 }
 
 auto
 unicorn_backend_t::async_verify_read(const std::string& entity, async::verify_handler_t hnd) -> void
 {
-    dbg("check read for entity: " << entity);
     return async::verify<io::unicorn::get>(*access, hnd, entity, *hnd.identity);
 }
 
 auto
 unicorn_backend_t::async_verify_write(const std::string& entity, async::verify_handler_t hnd) -> void
 {
-    dbg("check write for entity" << entity);
     return async::verify<io::unicorn::put>(*access, hnd, entity, *hnd.identity);
 }
 
@@ -75,8 +64,6 @@ auto
 unicorn_backend_t::async_read_metainfo(const std::string& entity, std::shared_ptr<async::read_handler_t> hnd) -> void
 {
     COCAINE_LOG_DEBUG(this->logger(), "unicat::unicorn read metainfo for {}", detail::make_acl_path(entity));
-
-    dbg("before get " << detail::make_acl_path(entity));
     auto scope = backend->get(
         [=] (std::future<unicorn::versioned_value_t> fut) {
             hnd->on_read(std::move(fut));
@@ -84,7 +71,6 @@ unicorn_backend_t::async_read_metainfo(const std::string& entity, std::shared_pt
         detail::make_acl_path(entity));
 
     hnd->attach_scope(std::move(scope));
-    dbg("after get\n");
 }
 
 auto
@@ -93,8 +79,6 @@ unicorn_backend_t::async_write_metainfo(const std::string& entity, const version
     COCAINE_LOG_DEBUG(this->logger(), "unicat::unicorn writing metainfo for {}", detail::make_acl_path(entity));
 
     using namespace auth;
-    dbg("writing version at " << detail::make_acl_path(entity) << ' ' << version << " for meta:\n" << meta);
-
     auto scope = backend->put(
         [=] (std::future<api::unicorn_t::response::put> fut) {
             hnd->on_write(std::move(fut));

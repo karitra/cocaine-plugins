@@ -19,7 +19,6 @@
 #include <cocaine/api/unicorn.hpp>
 #include <cocaine/unicorn/value.hpp>
 
-#include "cocaine/detail/forwards.hpp"
 #include "cocaine/auth/metainfo.hpp"
 
 #include "auth_cache.hpp"
@@ -33,6 +32,9 @@ namespace async {
 // Used in unicorn backend reincarnation for scope management.
 struct scope_ctl_t {
     auto attach_scope(api::unicorn_scope_ptr s) -> void {
+        if (scope) {
+            scope->close();
+        }
         scope = s;
     }
 

@@ -3,12 +3,6 @@
 #include "cocaine/auth/metainfo.hpp"
 #include "cocaine/idl/unicat.hpp"
 
-#if 0
-#define dbg(msg) std::cerr << msg << '\n';
-#else
-#define dbg(msg)
-#endif
-
 namespace cocaine { namespace auth {
 // TODO: unittest to all those stuff
 namespace detail {
@@ -118,12 +112,8 @@ auto
 alter<io::unicat::revoke>(auth::metainfo_t& metainfo, const auth::alter_data_t& data) -> void
 {
     using namespace detail;
-
-    dbg("unsetting flags " << data.flags);
-    dbg("before unset: " << metainfo);
     unset_perms(metainfo.c_perms, data.cids, data.flags);
     unset_perms(metainfo.u_perms, data.uids, data.flags);
-    dbg("before unset: " << metainfo);
 }
 
 template<>
@@ -131,12 +121,8 @@ auto
 alter<io::unicat::grant>(auth::metainfo_t& metainfo, const auth::alter_data_t& data) -> void
 {
     using namespace detail;
-
-    dbg("setting flags " << data.flags);
-    dbg("before set: " << metainfo);
     set_perms(metainfo.c_perms, data.cids, data.flags);
     set_perms(metainfo.u_perms, data.uids, data.flags);
-    dbg("after set: " << metainfo);
 }
 
 template

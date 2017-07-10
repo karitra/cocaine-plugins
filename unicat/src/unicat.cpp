@@ -10,6 +10,7 @@
 #include <blackhole/wrapper.hpp>
 
 #include <cocaine/api/authentication.hpp>
+#include <cocaine/context.hpp>
 #include <cocaine/errors.hpp>
 #include <cocaine/format.hpp>
 #include <cocaine/format/vector.hpp>
@@ -19,21 +20,14 @@
 #include "cocaine/service/unicat.hpp"
 #include "cocaine/idl/unicat.hpp"
 
-#include "cocaine/detail/forwards.hpp"
-#include "cocaine/context.hpp"
-
 #include "backend/backend.hpp"
 #include "backend/fabric.hpp"
 
 #include "auth_cache.hpp"
 #include "completion.hpp"
 
-#if 0
-#include <iostream>
-#define dbg(msg) std::cerr << msg << '\n'
-#else
-#define dbg(msg)
-#endif
+// #define LOCAL_DEBUG
+#undef LOCAL_DEBUG
 
 namespace cocaine {
 namespace service {
@@ -62,9 +56,13 @@ namespace detail {
 
         for(const auto& el : entities) {
             std::tie(scheme, service, entity) = el;
-            separated[cu::scheme_from_string(scheme)]
-                     [service && service->empty() == false ? *service : DEFAULT_SERVICE_NAME]
-                     .push_back(entity);
+
+            auto& service_mapping = separated[cu::scheme_from_string(scheme)];
+            if (service && service->empty() == false) {
+                service_mapping[*service].push_back(entity);;
+            } else {
+                service_mapping[DEFAULT_SERVICE_NAME].push_back(entity);
+            }
         }
 
         return separated;
@@ -86,8 +84,6 @@ namespace detail {
     template<typename R>
     auto
     unpack(const unicorn::versioned_value_t value) -> std::tuple<R, cu::version_t> {
-        dbg("value ver: " << value.version() << " contains: " << (value.exists() ? boost::lexical_cast<std::string>(value.value()) : "none"));
-
         if (value.exists() && value.value().convertible_to<R>()) {
             return std::make_tuple(value.value().to<R>(), value.version());
         }
@@ -134,13 +130,7 @@ struct on_write_t : unicat::async::write_handler_t {
     on_write_t(const cu::url_t url, std::shared_ptr<cu::base_completion_state_t> completion_state) :
         url(url),
         completion_state(completion_state)
-    {
-        dbg("on_write_t");
-    }
-
-    ~on_write_t() {
-        dbg("~on_write_t");
-    }
+    {}
 
     virtual auto on_write(std::future<void> fut) -> void override {
         on_done(std::move(fut));
@@ -185,13 +175,9 @@ struct on_read_t :
             identity(identity),
             alter_data(std::move(alter_data)),
             completion_state(std::move(completion_state))
-    {
-        dbg("on_read_t()");
-    }
+    {}
 
-    ~on_read_t() {
-        dbg("~on_read_t()");
-    }
+    ~on_read_t() {}
 
     auto on_read(std::future<unicorn::versioned_value_t> fut) -> void override {
         try {
@@ -216,15 +202,12 @@ struct on_read_t :
     }
 private:
     auto on_read(auth::metainfo_t metainfo, const cu::version_t version = cocaine::unicorn::not_existing_version) -> void {
-        dbg("on_read metainfo (before alter):\n" << metainfo);
         auth::alter<Event>(metainfo, alter_data);
-        dbg("on_read metainfo (after alter):\n" << metainfo);
 
         auto self = this->shared_from_this();
         auto on_verify = cu::async::verify_handler_t{
             identity,
             [=] (std::error_code ec) mutable -> void {
-                dbg("write verify error_code => " << ec);
                 if (ec) {
                     return detail::abort_deferred(self->backend, self->url, *self->completion_state,
                         "failed to complete 'write' operation", "Permission denied");
@@ -239,7 +222,6 @@ private:
     }
 
     auto on_exception(std::exception_ptr eptr) -> void {
-        dbg("on_read::on_exception for entity " << url.entity);
         backend.reset();
         completion_state->set_completion(cu::completion_t{url, std::move(eptr)});
     }
@@ -296,7 +278,7 @@ struct alter_slot_t :
 
                 COCAINE_LOG_INFO(log, "alter metainfo for scheme {} and service {}",
                     cu::scheme_to_string(scheme), name);
-#if 1
+#if !defined(LOCAL_DEBUG)
                 auto auth = api::authentication(context, "core", name);
                 const auto identity = std::make_shared<auth::identity_t>(auth->identify(headers));
 #else // for local debug
@@ -313,7 +295,6 @@ struct alter_slot_t :
                     auto on_verify = cu::async::verify_handler_t{
                         identity,
                         [=] (std::error_code ec) mutable -> void {
-                            dbg("read verify with code " << ec);
                             if (ec) {
                                 return detail::abort_deferred(backend, url, *completion_state,
                                     "failed to complete 'read' operation", "Permission denied");

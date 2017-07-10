@@ -4,8 +4,10 @@
 #include <vector>
 #include <iostream>
 
-#include <cocaine/auth/uid.hpp>
+#include <stdexcept>
 
+#include <cocaine/auth/uid.hpp>
+#include <cocaine/format.hpp>
 #include <cocaine/dynamic.hpp>
 #include <cocaine/dynamic/converters.hpp>
 
@@ -111,7 +113,8 @@ struct dynamic_converter<auth::metainfo_t> {
     convert(const dynamic_t& from) {
         auto& tuple = from.as_array();
         if (tuple.size() != 2) {
-            throw std::bad_cast();
+            throw std::invalid_argument{
+                cocaine::format("wrong number of ACL records, should be 2, but {} was provided", tuple.size())};
         }
 
         return result_type{
