@@ -9,6 +9,7 @@
 #include <blackhole/scope/holder.hpp>
 #include <blackhole/wrapper.hpp>
 
+#include <cocaine/auth/uid.hpp>
 #include <cocaine/format.hpp>
 #include <cocaine/logging.hpp>
 #include <cocaine/locked_ptr.hpp>
@@ -28,22 +29,27 @@ struct completion_t final {
     enum Opcode { Nop, ReadOp, WriteOp };
 
     url_t url;
+    std::shared_ptr<auth::identity_t> identity;
 
     bool done;
-    int error_code;
+
+    // TODO: ugly error representation, refactor someday.
+    std::error_code err_code;
     Opcode opcode;
     std::exception_ptr eptr;
 
-    explicit completion_t(const url_t);
-    completion_t(const url_t, const int ec, const Opcode);
-    completion_t(const url_t, std::exception_ptr);
+    explicit completion_t(const url_t, std::shared_ptr<auth::identity_t>&);
+    completion_t(const url_t, std::shared_ptr<auth::identity_t>&, const std::error_code ec, const Opcode);
+    completion_t(const url_t, std::shared_ptr<auth::identity_t>&, std::exception_ptr);
 
     auto make_access_error() const -> std::string;
     auto make_exception_error() const -> std::string;
 
-    auto has_error() const -> bool;
+    auto has_exception() const -> bool;
     auto has_error_code() const -> bool;
 };
+
+auto opcode_to_string(completion_t::Opcode) -> std::string;
 
 struct base_completion_state_t {
     virtual ~base_completion_state_t() = default;
@@ -54,18 +60,23 @@ template<typename Upstream, typename Protocol>
 struct async_completion_state_t : public base_completion_state_t {
     using compl_state_type = std::vector<completion_t>;
     synchronized<compl_state_type> state;
+
     Upstream upstream;
-
     std::unique_ptr<logging::logger_t> log;
+    const std::string operation_name;
 
-    explicit async_completion_state_t(Upstream upstream, std::unique_ptr<logging::logger_t> log) :
+    explicit async_completion_state_t(Upstream upstream, std::unique_ptr<logging::logger_t> log,
+        const std::string& operation_name) :
         upstream(std::move(upstream)),
-        log(std::move(log))
+        log(std::move(log)),
+        operation_name(operation_name)
     {}
 
     virtual ~async_completion_state_t() {
         auto count = state.synchronize()->size();
-        COCAINE_LOG_INFO(log, "async completion with {} handlers", count);
+
+        COCAINE_LOG_INFO(log,
+            "async {} operation done for {} handlers", operation_name, count);
         finalize();
     }
 
@@ -82,11 +93,35 @@ struct async_completion_state_t : public base_completion_state_t {
             // TODO: make errors with <code, string> pairs
             std::vector<std::string> errors;
 
-            for(auto& comp : state) {
-                if (comp.has_error()) {
+            for(const auto& comp : state) {
+                if (comp.has_exception()) {
+                    const auto err_message = comp.make_exception_error();
+
+                    COCAINE_LOG_WARNING(log, "access operation '{}' failed due access error for {}:{}:{} with cids {} uids {}, exception: {}",
+                        operation_name,
+                        scheme_to_string(comp.url.scheme), comp.url.service_name, comp.url.entity,
+                        comp.identity->cids(), comp.identity->uids(),
+                        err_message
+                    );
+
                     errors.push_back(comp.make_exception_error());
                 } else if (comp.has_error_code()) {
-                    errors.push_back(comp.make_access_error());
+                    const auto err_message = comp.make_access_error();
+
+                    COCAINE_LOG_WARNING(log, "{} part of {} operation failed due exception '{}' for {}:{}:{} with cids {} uids {}",
+                        opcode_to_string(comp.opcode),
+                        operation_name,
+                        err_message,
+                        scheme_to_string(comp.url.scheme), comp.url.service_name, comp.url.entity,
+                        comp.identity->cids(), comp.identity->uids()
+                    );
+
+                    errors.push_back(err_message);
+                } else {
+                    COCAINE_LOG_INFO(log, "operation {} completed for {}:{}:{} with cids {} uids {}",
+                        operation_name,
+                        scheme_to_string(comp.url.scheme), comp.url.service_name, comp.url.entity,
+                        comp.identity->cids(), comp.identity->uids());
                 }
             }
 
@@ -101,7 +136,7 @@ struct async_completion_state_t : public base_completion_state_t {
             return;
         }
 
-        const auto to_take = std::min(count, detail::TAKE_EXCEPT_TRACE);
+        const auto to_take = std::min(errors_list.size(), detail::TAKE_EXCEPT_TRACE);
         COCAINE_LOG_WARNING(log, "there was {} exceptions, reporting first {} to client", errors_list.size(), to_take);
 
         upstream.template send<typename Protocol::error>(

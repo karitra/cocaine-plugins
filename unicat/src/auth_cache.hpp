@@ -12,6 +12,9 @@
 
 namespace cocaine { namespace unicat { namespace authorization {
 
+//
+// TODO: seems overdesigned and redundant, should be simplified, refactor out!
+//
 // Store auth backends in cache for service wide usage, it helps to avoid
 // authorization structure (within backend) to be deleted inside self
 // executer thread due race conditions on async function exception: smart

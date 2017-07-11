@@ -77,20 +77,6 @@ namespace detail {
     }
 } // detail
 
-auto stub_from_meta(const auth::metainfo_t& meta) -> auth::metainfo_dynamic_stub_t {
-   auth::metainfo_dynamic_stub_t stub;
-   detail::stringify_keys<auth::cid_t>(meta.c_perms, stub.c_perms);
-   detail::stringify_keys<auth::uid_t>(meta.u_perms, stub.u_perms);
-   return stub;
-}
-
-auto meta_from_stub(const auth::metainfo_dynamic_stub_t& stub) -> auth::metainfo_t {
-    auth::metainfo_t meta;
-    detail::digitize_keys<auth::cid_t>(stub.c_perms, meta.c_perms);
-    detail::digitize_keys<auth::uid_t>(stub.u_perms, meta.u_perms);
-    return meta;
-}
-
 auto operator<<(std::ostream& os, const metainfo_t& meta) -> std::ostream&
 {
    os << "cids:\n";
