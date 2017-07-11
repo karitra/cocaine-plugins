@@ -36,18 +36,6 @@ namespace cocaine { namespace auth {
 
     auto operator<<(std::ostream& os, const metainfo_t& meta) -> std::ostream&;
 
-    // TODO: refactor out all 'stub' stuff, it is temporary, used because dynamic_t
-    //       doesn't support non-strign keys yet.
-    //
-    // persistent metainfo representation, different in key types
-    struct metainfo_dynamic_stub_t {
-        std::map<std::string, flags_t> c_perms;
-        std::map<std::string, flags_t> u_perms;
-    };
-
-    auto stub_from_meta(const metainfo_t& meta) -> metainfo_dynamic_stub_t;
-    auto meta_from_stub(const metainfo_dynamic_stub_t& meta) -> metainfo_t;
-
     struct alter_data_t {
         std::vector<auth::cid_t> cids;
         std::vector<auth::uid_t> uids;
@@ -71,24 +59,21 @@ namespace io {
 template<>
 struct type_traits<auth::metainfo_t> {
     typedef boost::mpl::list<
-        std::map<std::string, auth::flags_t>,
-        std::map<std::string, auth::flags_t>
+        std::map<auth::cid_t, auth::flags_t>,
+        std::map<auth::uid_t, auth::flags_t>
     > underlying_type;
 
     template<class Stream>
     static
     void
     pack(msgpack::packer<Stream>& target, const auth::metainfo_t& meta) {
-        auto source = stub_from_meta(meta);
-        type_traits<underlying_type>::pack(target, source.c_perms, source.u_perms);
+        type_traits<underlying_type>::pack(target, meta.c_perms, meta.u_perms);
     }
 
     static
     void
     unpack(const msgpack::object& source, auth::metainfo_t& target) {
-        auto stub = auth::metainfo_dynamic_stub_t{};
-        type_traits<underlying_type>::unpack(source, stub.c_perms, stub.u_perms);
-        target = meta_from_stub(stub);
+        type_traits<underlying_type>::unpack(source, target.c_perms, target.u_perms);
     }
 };
 
