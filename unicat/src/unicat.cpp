@@ -161,8 +161,7 @@ private:
 
 template<typename Event>
 struct on_read_t :
-    public unicat::async::read_handler_t,
-    public std::enable_shared_from_this<on_read_t<Event>>
+    public unicat::async::read_handler_t
 {
     std::shared_ptr<cu::backend_t> backend;
     const cu::url_t url;

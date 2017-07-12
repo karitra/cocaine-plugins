@@ -35,7 +35,7 @@ def test_alter(unicat, items):
 
         revoke(unicat, items, [1, 2], [4,5], 0),
         revoke(unicat, items, [1, 2], [4,5], 0),
-        ]
+    ]
 
 
 if __name__ == '__main__':
@@ -100,11 +100,13 @@ if __name__ == '__main__':
     ]
 
     # Warning: a lot of exceptions output, should be controlled by CLI flags someday
-    try:
-        ioloop.IOLoop.current().run_sync(lambda: test_alter(unicat, items))
-    except ServiceError as err:
-        # TODO: compare error
-        print('Expected errors')
+    # except_count = 0
+    # try:
+    #     ioloop.IOLoop.current().run_sync(lambda: test_alter(unicat, items))
+    # except Exception:
+    #     except_count += 1
+    #     # TODO: compare error
+    #     print('Expected error')
 
     # TODO: test for different service namings
 

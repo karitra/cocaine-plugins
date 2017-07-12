@@ -131,7 +131,7 @@ struct async_completion_state_t : public base_completion_state_t {
         const auto count = state.synchronize()->size();
 
         if (errors_list.empty()) {
-            COCAINE_LOG_INFO(log, "all {} completions has been done with success, report result to user", count);
+            COCAINE_LOG_INFO(log, "all {} completions has been done with success, report result to client", count);
             upstream.template send<typename Protocol::value>();
             return;
         }
