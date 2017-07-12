@@ -132,10 +132,10 @@ struct on_write_t : unicat::async::write_handler_t {
     std::shared_ptr<auth::identity_t> identity;
     std::shared_ptr<cu::base_completion_state_t> completion_state;
 
-    on_write_t(const cu::url_t url, std::shared_ptr<auth::identity_t>& identity, std::shared_ptr<cu::base_completion_state_t> completion_state) :
+    on_write_t(const cu::url_t url, std::shared_ptr<auth::identity_t> identity, std::shared_ptr<cu::base_completion_state_t> completion_state) :
         url(url),
         identity(std::move(identity)),
-        completion_state(completion_state)
+        completion_state(std::move(completion_state))
     {}
 
     virtual auto on_write(std::future<void> fut) -> void override {
@@ -172,12 +172,12 @@ struct on_read_t :
     on_read_t(
         std::shared_ptr<cu::backend_t> backend,
         const cu::url_t url,
-        const std::shared_ptr<auth::identity_t>& identity,
+        const std::shared_ptr<auth::identity_t> identity,
         auth::alter_data_t alter_data,
         std::shared_ptr<cu::base_completion_state_t> completion_state) :
             backend(std::move(backend)),
             url(url),
-            identity(identity),
+            identity(std::move(identity)),
             alter_data(std::move(alter_data)),
             completion_state(std::move(completion_state))
     {}
