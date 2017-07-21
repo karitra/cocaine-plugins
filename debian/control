@@ -242,13 +242,6 @@ Depends: ${shlibs:Depends}, ${misc:Depends}
 Description: Cocaine - Unicat Service
  Unified Cocaine ACL tooling service.
 
-Package: libcocaine-plugin-unicat-dev
-Architecture: any
-Section: libdevel
-Depends: ${misc:Depends}, libcocaine-plugin-unicat3 (= ${binary:Version})
-Description: Cocaine - Unicat Service
- Unified Cocaine ACL tooling service.
-
 Package: libcocaine-plugin-unicat-dbg
 Architecture: any
 Section: debug
