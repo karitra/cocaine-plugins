@@ -1,3 +1,9 @@
+#include <cassert>
+#include <future>
+#include <utility>
+
+#include <unistd.h>
+
 #include "cocaine/service/uniresis.hpp"
 
 #include <asio/io_service.hpp>
@@ -7,13 +13,19 @@
 
 #include <cocaine/api/unicorn.hpp>
 #include <cocaine/context.hpp>
+#include <cocaine/context/signal.hpp>
 #include <cocaine/context/config.hpp>
 #include <cocaine/dynamic.hpp>
 #include <cocaine/executor/asio.hpp>
 #include <cocaine/unicorn/value.hpp>
 #include <cocaine/unique_id.hpp>
 
+#include <cocaine/traits/dynamic.hpp>
+#include <cocaine/traits/endpoint.hpp>
+#include <cocaine/traits/vector.hpp>
+
 #include "cocaine/uniresis/error.hpp"
+
 
 namespace cocaine {
 namespace service {
@@ -92,11 +104,17 @@ public:
         log(std::move(log))
     {}
 
+    ~updater_t() {
+        std::cerr << "~updater_t" << "\n";
+    }
+
     auto
     notify() -> void {
         COCAINE_LOG_DEBUG(log, "schedule resource notification on `{}` ...", path);
+        std::cerr << "notify\n";
         scope = unicorn->create(
-            std::bind(&updater_t::on_create, shared_from_this(), ph::_1),
+            std::bind(&weak_from_self_t::on_create, self_as_weak(), ph::_1),
+            // std::bind(&updater_t::on_create, shared_from_this(), ph::_1),
             path,
             make_value(),
             true,
@@ -104,7 +122,47 @@ public:
         );
     }
 
+    auto
+    closes_scopes() -> void {
+        timer.cancel();
+        subscope.reset();
+        scope.reset();
+    }
+
 private:
+    using self_type = updater_t;
+
+    //
+    // Unicorn holds callback pointer even after callback completion and
+    // scope close, so as a temporary workaround wrapper struct for weak_ptr
+    // introduced.
+    //
+    struct weak_from_self_t {
+        std::weak_ptr<self_type> weak_self;
+
+        weak_from_self_t(std::shared_ptr<self_type> self_shared) :
+            weak_self(std::move(self_shared))
+        {}
+
+        auto
+        on_create(std::future<bool> future) -> void {
+            if (const auto strong = weak_self.lock()) {
+                strong->on_create(std::move(future));
+            }
+        }
+
+        auto
+        on_subscribe(std::future<unicorn::versioned_value_t> future) -> void {
+            if (const auto strong = weak_self.lock()) {
+                strong->on_subscribe(std::move(future));
+            }
+        }
+    };
+
+    auto self_as_weak() -> weak_from_self_t {
+        return weak_from_self_t(shared_from_this());
+    }
+
     auto
     make_value() const -> dynamic_t {
         dynamic_t::object_t result;
@@ -127,12 +185,15 @@ private:
 
     auto
     notify_later() -> void {
-        auto self = shared_from_this();
+        std::cerr << "notify later\n";
 
+        auto self = shared_from_this();
         COCAINE_LOG_DEBUG(log, "schedule resource notification after {} sec ...", 1);
         timer.expires_from_now(boost::posix_time::seconds(1));
         timer.async_wait([&, self](std::error_code ec) {
+            std::cerr << "async timer\n";
             if (ec) {
+                std::cerr << "canceled\n";
                 return;
             }
 
@@ -146,9 +207,11 @@ private:
             auto created = future.get();
 
             if (created) {
+                std::cerr << "on_create::created\n";
                 COCAINE_LOG_INFO(log, "registered machine's resources on `{}` path", path);
                 subscribe();
             } else {
+                std::cerr << "on_create::failed\n";
                 COCAINE_LOG_ERROR(log, "failed to create `{}` node: already exists", path);
                 notify_later();
             }
@@ -163,9 +226,12 @@ private:
 
     auto
     subscribe() -> void {
+        std::cerr << "subscribe\n";
+
         COCAINE_LOG_DEBUG(log, "schedule resource node subscription on `{}` ...", path);
         scope = unicorn->subscribe(
-            std::bind(&updater_t::on_subscribe, shared_from_this(), ph::_1),
+            std::bind(&weak_from_self_t::on_subscribe, self_as_weak(), ph::_1),
+            // std::bind(&updater_t::on_subscribe, shared_from_this(), ph::_1),
             path
         );
     }
@@ -174,9 +240,18 @@ private:
     on_subscribe(std::future<unicorn::versioned_value_t> future) -> void {
         COCAINE_LOG_DEBUG(log, "received node update on `{}` path", path);
 
+        std::cerr << "on_subscribe\n";
+
         try {
+            std::cerr << "waiting...\n";
             auto value = future.get();
+            std::cerr << "got it\n";
+
+            // sleep(2);
+            // throw std::runtime_error("boo");
+
             if (value.version() == 0) {
+                std::cerr << "zero version\n";
                 return;
             }
 
@@ -260,6 +335,27 @@ uniresis_t::uniresis_t(context_t& context, asio::io_service& loop, const std::st
     on<io::uniresis::uuid>([&] {
         return uuid;
     });
+
+    // Context signal/slot.
+    signal = std::make_shared<dispatch<io::context_tag>>(name);
+    signal->on<io::context::shutdown>(std::bind(&uniresis_t::on_context_shutdown, this));
+
+    context.signal_hub().listen(signal, loop);
+    std::cerr << "updater use count(3): " << updater.use_count() << '\n';
+}
+
+auto uniresis_t::on_context_shutdown() -> void {
+    assert(updater);
+
+    updater->closes_scopes();
+
+    std::cerr
+        << "uniresis_t::on_context_shutdown(2), updater use_count: "
+        << updater.use_count() << '\n';
+
+    updater.reset();
+
+    signal = nullptr;
 }
 
 } // namespace service
