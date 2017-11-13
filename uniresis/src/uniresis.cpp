@@ -1,8 +1,7 @@
 #include <cassert>
 #include <future>
 #include <utility>
-
-#include <unistd.h>
+#include <thread>
 
 #include "cocaine/service/uniresis.hpp"
 
@@ -79,7 +78,8 @@ class uniresis_t::updater_t : public std::enable_shared_from_this<uniresis_t::up
     std::shared_ptr<api::unicorn_t> unicorn;
     api::unicorn_scope_ptr scope;
     api::unicorn_scope_ptr subscope;
-    executor::owning_asio_t executor;
+    // executor::owning_asio_t executor;
+    std::unique_ptr<executor::owning_asio_t> executor;
     asio::deadline_timer timer;
     std::shared_ptr<logging::logger_t> log;
 
@@ -99,13 +99,15 @@ public:
         unicorn(std::move(unicorn)),
         scope(),
         subscope(),
-        executor(),
-        timer(executor.asio()),
+        executor(new executor::owning_asio_t()),
+        // timer(new asio::deadline_timer(executor->asio())),
+        // executor(),
+        timer(executor->asio()),
         log(std::move(log))
     {}
 
     ~updater_t() {
-        std::cerr << "~updater_t" << "\n";
+        std::cerr << "~updater_t @ " << std::this_thread::get_id() << "\n";
     }
 
     auto
@@ -113,7 +115,8 @@ public:
         COCAINE_LOG_DEBUG(log, "schedule resource notification on `{}` ...", path);
         std::cerr << "notify\n";
         scope = unicorn->create(
-            std::bind(&weak_from_self_t::on_create, self_as_weak(), ph::_1),
+            // std::bind(&updater_t::on_create, this, ph::_1),
+            weak_wrap_fun(std::bind(&updater_t::on_create, this, ph::_1)),
             // std::bind(&updater_t::on_create, shared_from_this(), ph::_1),
             path,
             make_value(),
@@ -123,10 +126,18 @@ public:
     }
 
     auto
-    closes_scopes() -> void {
-        timer.cancel();
+    finalize() -> void {
+        std::cerr << "in finalize\n";
+
+        // Smell of various races here!
         subscope.reset();
         scope.reset();
+
+        timer.cancel();
+        // executor->asio().stop();
+        executor.reset();
+
+        std::cerr << "finalize done\n";
     }
 
 private:
@@ -137,30 +148,27 @@ private:
     // scope close, so as a temporary workaround wrapper struct for weak_ptr
     // introduced.
     //
-    struct weak_from_self_t {
-        std::weak_ptr<self_type> weak_self;
-
-        weak_from_self_t(std::shared_ptr<self_type> self_shared) :
-            weak_self(std::move(self_shared))
+    template<class T, class F>
+    struct weak_wrapper_t {
+        weak_wrapper_t(std::weak_ptr<T> self, F&& fun):
+            self(std::move(self)),
+            fun(std::move(fun))
         {}
 
-        auto
-        on_create(std::future<bool> future) -> void {
-            if (const auto strong = weak_self.lock()) {
-                strong->on_create(std::move(future));
+        template<class... Args>
+        auto operator()(Args&&... args) -> void {
+            if (auto locked = self.lock()) {
+                fun(std::forward<Args>(args)...);
             }
         }
 
-        auto
-        on_subscribe(std::future<unicorn::versioned_value_t> future) -> void {
-            if (const auto strong = weak_self.lock()) {
-                strong->on_subscribe(std::move(future));
-            }
-        }
+        std::weak_ptr<T> self;
+        F fun;
     };
 
-    auto self_as_weak() -> weak_from_self_t {
-        return weak_from_self_t(shared_from_this());
+    template<class F>
+    auto weak_wrap_fun(F&& fun) -> weak_wrapper_t<self_type, F> {
+        return weak_wrapper_t<self_type, F>(shared_from_this(), std::forward<F>(fun));
     }
 
     auto
@@ -189,7 +197,8 @@ private:
 
         auto self = shared_from_this();
         COCAINE_LOG_DEBUG(log, "schedule resource notification after {} sec ...", 1);
-        timer.expires_from_now(boost::posix_time::seconds(1));
+
+        timer.expires_from_now(boost::posix_time::seconds(7));
         timer.async_wait([&, self](std::error_code ec) {
             std::cerr << "async timer\n";
             if (ec) {
@@ -217,9 +226,11 @@ private:
             }
         } catch (const std::system_error& err) {
             COCAINE_LOG_ERROR(log, "failed to create `{}` node: {}", path, error::to_string(err));
+            std::cerr << "excn1: " << error::to_string(err) << '\n';
             notify_later();
         } catch (const std::exception& err) {
             COCAINE_LOG_ERROR(log, "failed to create `{}` node: {}", path, err.what());
+            std::cerr << "excn2: " << err.what() << '\n';
             notify_later();
         }
     }
@@ -230,8 +241,7 @@ private:
 
         COCAINE_LOG_DEBUG(log, "schedule resource node subscription on `{}` ...", path);
         scope = unicorn->subscribe(
-            std::bind(&weak_from_self_t::on_subscribe, self_as_weak(), ph::_1),
-            // std::bind(&updater_t::on_subscribe, shared_from_this(), ph::_1),
+            weak_wrap_fun(std::bind(&updater_t::on_subscribe, this, ph::_1)),
             path
         );
     }
@@ -247,8 +257,8 @@ private:
             auto value = future.get();
             std::cerr << "got it\n";
 
-            // sleep(2);
-            // throw std::runtime_error("boo");
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+            throw std::runtime_error("boo");
 
             if (value.version() == 0) {
                 std::cerr << "zero version\n";
@@ -257,6 +267,9 @@ private:
 
             COCAINE_LOG_WARNING(log, "received node update on `{}`, but it shouldn't", path);
         } catch (const std::exception& err) {
+            std::cerr << "on_subscribe:: exception " << '\n';
+            std::cerr << "excn: " << err.what() << '\n';
+
             COCAINE_LOG_ERROR(log, "failed to hold subscription on `{}` node: {}", path, err.what());
             notify();
         }
@@ -341,18 +354,13 @@ uniresis_t::uniresis_t(context_t& context, asio::io_service& loop, const std::st
     signal->on<io::context::shutdown>(std::bind(&uniresis_t::on_context_shutdown, this));
 
     context.signal_hub().listen(signal, loop);
-    std::cerr << "updater use count(3): " << updater.use_count() << '\n';
+    std::cerr << "updater use count(ctor return): " << updater.use_count() << '\n';
 }
 
 auto uniresis_t::on_context_shutdown() -> void {
     assert(updater);
 
-    updater->closes_scopes();
-
-    std::cerr
-        << "uniresis_t::on_context_shutdown(2), updater use_count: "
-        << updater.use_count() << '\n';
-
+    updater->finalize();
     updater.reset();
 
     signal = nullptr;
