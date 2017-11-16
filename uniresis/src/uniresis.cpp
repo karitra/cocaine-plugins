@@ -124,11 +124,11 @@ public:
 private:
     using self_type = updater_t;
 
-    template<class T, class F>
+    template<class T, class Fn>
     struct weak_wrapper_t {
-        weak_wrapper_t(std::weak_ptr<T> self, F&& fun):
+        weak_wrapper_t(std::weak_ptr<T> self, Fn&& fun):
             self(std::move(self)),
-            fun(std::move(fun))
+            fun(std::move(std::forward<Fn>(fun)))
         {}
 
         template<class... Args>
@@ -139,7 +139,7 @@ private:
         }
 
         std::weak_ptr<T> self;
-        F fun;
+        Fn fun;
     };
 
     template<class Fn>
