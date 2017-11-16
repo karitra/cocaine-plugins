@@ -5,6 +5,7 @@
 #include <cocaine/api/service.hpp>
 #include <cocaine/idl/context.hpp>
 #include <cocaine/rpc/dispatch.hpp>
+#include <cocaine/executor/asio.hpp>
 
 #include "cocaine/idl/uniresis.hpp"
 #include "cocaine/uniresis/resources.hpp"
@@ -19,6 +20,10 @@ class uniresis_t : public api::service_t, public dispatch<io::uniresis_tag> {
     uniresis::resources_t resources;
     std::shared_ptr<updater_t> updater;
     std::shared_ptr<logging::logger_t> log;
+
+    // Note that executor `must die` before updater as it contain io loop for
+    // updater's inner timer.
+    std::shared_ptr<executor::owning_asio_t> executor;
 
     // Slot for context signals.
     std::shared_ptr<dispatch<io::context_tag>> signal;
