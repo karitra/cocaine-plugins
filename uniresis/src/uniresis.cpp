@@ -64,6 +64,24 @@ auto resolve(const std::string& hostname) -> std::vector<tcp::endpoint> {
     return endpoints;
 }
 
+template<class T, class Fn>
+struct weak_wrapper_t {
+    weak_wrapper_t(std::weak_ptr<T> self, Fn&& fun):
+        self(std::move(self)),
+        fun(std::move(std::forward<Fn>(fun)))
+    {}
+
+    template<class... Args>
+    auto operator()(Args&&... args) -> void {
+        if (const auto locked = self.lock()) {
+            fun(std::forward<Args>(args)...);
+        }
+    }
+
+    std::weak_ptr<T> self;
+    Fn fun;
+};
+
 } // namespace
 
 /// A task that will try to notify about resources information on the machine.
@@ -104,7 +122,7 @@ public:
     notify() -> void {
         COCAINE_LOG_DEBUG(log, "schedule resource notification on `{}` ...", path);
         scope = unicorn->create(
-            weak_wrap_method(std::bind(&updater_t::on_create, this, ph::_1)),
+            weak_wrap_self(std::bind(&updater_t::on_create, this, ph::_1)),
             path,
             make_value(),
             true,
@@ -124,26 +142,8 @@ public:
 private:
     using self_type = updater_t;
 
-    template<class T, class Fn>
-    struct weak_wrapper_t {
-        weak_wrapper_t(std::weak_ptr<T> self, Fn&& fun):
-            self(std::move(self)),
-            fun(std::move(std::forward<Fn>(fun)))
-        {}
-
-        template<class... Args>
-        auto operator()(Args&&... args) -> void {
-            if (auto locked = self.lock()) {
-                fun(std::forward<Args>(args)...);
-            }
-        }
-
-        std::weak_ptr<T> self;
-        Fn fun;
-    };
-
     template<class Fn>
-    auto weak_wrap_method(Fn&& fun) -> weak_wrapper_t<self_type, Fn> {
+    auto weak_wrap_self(Fn&& fun) -> weak_wrapper_t<self_type, Fn> {
         return weak_wrapper_t<self_type, Fn>(shared_from_this(), std::forward<Fn>(fun));
     }
 
@@ -207,7 +207,7 @@ private:
     subscribe() -> void {
         COCAINE_LOG_DEBUG(log, "schedule resource node subscription on `{}` ...", path);
         scope = unicorn->subscribe(
-            weak_wrap_method(std::bind(&updater_t::on_subscribe, this, ph::_1)),
+            weak_wrap_self(std::bind(&updater_t::on_subscribe, this, ph::_1)),
             path
         );
     }
@@ -315,7 +315,7 @@ uniresis_t::uniresis_t(context_t& context, asio::io_service& loop, const std::st
 auto uniresis_t::on_context_shutdown() -> void {
     if (updater) {
         // Check is needed for case if something will send (abnormally)
-        // signal more then once.
+        // signal more then once while `signal` wasn't properly reseted.
         updater->finalize();
         updater.reset();
     }
