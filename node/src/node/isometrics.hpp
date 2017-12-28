@@ -59,7 +59,8 @@ struct worker_metrics_t {
     };
 
     using clock_type = std::chrono::system_clock;
-    using gauge_metrics_type = metrics::shared_metric<metrics::gauge<double>>;
+    using gauge_repr_type = double;
+    using gauge_metrics_type = metrics::shared_metric<metrics::gauge<gauge_repr_type>>;
 
     std::unordered_map<std::string, counter_metric_t> common_counters;
     std::unordered_map<std::string, gauge_metrics_type> gauges;
@@ -87,7 +88,11 @@ struct worker_metrics_t {
 
     template<typename Integral>
     auto
-    set_existing_counter(const std::string& name, const aggregate_t desired, const Integral value = 0) -> void;
+    update_counter(const std::string& name, const aggregate_t desired, const Integral value = 0) -> void;
+
+    template<typename Fn>
+    auto
+    update_gauge(const std::string& name, Fn&& fun) -> void;
 };
 
 struct metrics_aggregate_proxy_t {
@@ -101,7 +106,20 @@ struct metrics_aggregate_proxy_t {
         value_type deltas; // summation of worker_metrics deltas
     };
 
+    struct gauge_avg_t {
+        using value_type = worker_metrics_t::gauge_repr_type;
+
+        value_type value;
+        int count;
+
+        auto add(const value_type value) -> void {
+            this->value += value;
+            ++this->count;
+        }
+    };
+
     std::unordered_map<std::string, counter_metric_t> common_counters;
+    std::unordered_map<std::string, gauge_avg_t> gauges;
 
     auto
     operator+(const worker_metrics_t& worker_metrics) -> metrics_aggregate_proxy_t&;

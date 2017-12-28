@@ -59,11 +59,21 @@ namespace conf {
         {"cpu_load", {metric_type_t::gauge, aggregate_t::instant}},
 
         // Yet unused.
-        {"sys_time", {metric_type_t::counter, aggregate_t::aggregate}},
-        {"user_time", {metric_type_t::counter, aggregate_t::aggregate}},
+        // Faded for now.
+        //
+        // {"sys_time", {metric_type_t::counter, aggregate_t::aggregate}},
+        // {"user_time", {metric_type_t::counter, aggregate_t::aggregate}},
 
         // Memory usage (in bytes).
         {"mem", {metric_type_t::counter, aggregate_t::instant}},
+
+        // More specific memory metrics, unimplemented for now,
+        // probably would be removed someway.
+        //
+        // Faded for now.
+        //
+        // {"vms", {metric_type_t::counter, aggregate_t::instant}},
+        // {"rss", {metric_type_t::counter, aggregate_t::instant}},
 
         // Running times.
         {"uptime", {metric_type_t::counter, aggregate_t::aggregate}},
@@ -182,22 +192,24 @@ namespace detail {
 
             auto updated = int{};
             for(const auto& net : value) {
-                updated += proc_network_record(net.first, net.second.as_object());
+                updated += parse_network_record(net.first, net.second.as_object());
             }
 
             return updated;
         }
 
         template<typename Any>
-        auto operator()(const Any&) const -> int {
+        auto operator()(Any&&) -> int {
             // pass
-            // TODO: log
+            // TODO:
+            //  - log
+            //  - `scary code` as it could stub out some other overloadings!
             dbg("dynamic_t::visitor: any value");
             return 0;
         }
 
     private:
-        auto proc_network_record(const std::string& name, const dynamic_t::object_t& net) -> int {
+        auto parse_network_record(const std::string& name, const dynamic_t::object_t& net) -> int {
             dbg("proc network name " << name);
 
             auto rx = net.find("rx_bytes");
@@ -238,14 +250,22 @@ metrics_aggregate_proxy_t::operator+(const worker_metrics_t& worker_metrics) -> 
 {
     dbg("worker_metrics_t::operator+() summing to proxy");
 
-    for(const auto& worker_record : worker_metrics.common_counters) {
-        const auto& name = worker_record.first;
-        const auto& metric = worker_record.second;
+    for(const auto& worker_counter : worker_metrics.common_counters) {
+        const auto& name = worker_counter.first;
+        const auto& metric = worker_counter.second;
 
         auto& self_record = this->common_counters[name];
 
         self_record.values += metric.value->load();
         self_record.deltas += metric.delta;
+    }
+
+    for(const auto& worker_gauge : worker_metrics.gauges) {
+        const auto& name = worker_gauge.first;
+        const auto& metric = worker_gauge.second;
+
+        auto& self_record = this->gauges[name];
+        self_record.add(metric->operator()());
     }
 
     return *this;
@@ -379,7 +399,7 @@ private:
 
         for(const auto& metric : metrics) {
             const auto& name = metric.first;
-            auto& value = metric.second;
+            const auto& value = metric.second;
 
             dbg("[response] metrics name: " << name);
 
@@ -395,7 +415,8 @@ private:
 
             try {
                 dbg("[response] found metrics record for " << nm << ", updating...");
-                updated += value.apply(detail::value_processor(nm, result));
+                auto processor = detail::value_processor(nm, result);
+                updated += value.apply(processor);
             } catch (const std::exception& err) {
                 // TODO: report to log
                 dbg("[response] exception " << err.what());
@@ -466,11 +487,10 @@ worker_metrics_t::worker_metrics_t(context_t& ctx, const std::string& app_name, 
     worker_metrics_t(ctx, cocaine::format("{}.isolate.{}", app_name, id))
 {}
 
-
 //
 // TODO:
 //   - Summation for network metrics.
-//   - Redesign those code.
+//   - Redesign those code, it is pile of garbage!
 auto
 worker_metrics_t::assign(metrics_aggregate_proxy_t&& proxy) -> void {
     using namespace conf;
@@ -487,9 +507,10 @@ worker_metrics_t::assign(metrics_aggregate_proxy_t&& proxy) -> void {
             switch (init_desc.type) {
                 case metric_type_t::counter:
                     // No workers metrics, zero out instant counters summs.
-                    this->set_existing_counter(init_name, aggregate_t::instant, 0);
+                    this->update_counter(init_name, aggregate_t::instant, 0);
                     break;
                 case metric_type_t::gauge:
+                    this->update_gauge(init_name, []() -> double { return 0.0; });
                     break;
                 case metric_type_t::network:
                     break;
@@ -501,26 +522,43 @@ worker_metrics_t::assign(metrics_aggregate_proxy_t&& proxy) -> void {
             const auto& proxy_record = proxy_metrics.second;
 
             auto self_it = this->common_counters.find(proxy_name);
-            if (self_it != std::end(this->common_counters)) {
-                auto& self_record = self_it->second;
-                switch (self_record.aggregation) {
-                    case aggregate_t::aggregate:
-                        self_record.value->fetch_add(proxy_record.deltas);
-                        break;
-                    case aggregate_t::instant:
-                        self_record.value->store(proxy_record.values);
-                        break;
-                    default:
-                        break;
-                };
+            if (self_it == std::end(this->common_counters)) {
+                continue;
             }
+
+            auto& self_record = self_it->second;
+            switch (self_record.aggregation) {
+                case aggregate_t::aggregate:
+                    self_record.value->fetch_add(proxy_record.deltas);
+                    break;
+                case aggregate_t::instant:
+                    self_record.value->store(proxy_record.values);
+                    break;
+                default:
+                    break;
+            };
         } // for metrics in proxy
+
+        for(const auto& proxy_metrics : proxy.gauges) {
+            const auto& proxy_name = proxy_metrics.first;
+            const auto proxy_record = proxy_metrics.second;
+
+            auto some_fun = [=]() {
+                if (proxy_record.count) {
+                    return proxy_record.value / proxy_record.count;
+                } else {
+                    return 0.0;
+                }
+            };
+
+            this->update_gauge(proxy_name, some_fun);
+        } // for proxy_metrics
     }
 }
 
 template<typename Integral>
 auto
-worker_metrics_t::set_existing_counter(const std::string& name, const aggregate_t desired, const Integral value) -> void
+worker_metrics_t::update_counter(const std::string& name, const aggregate_t desired, const Integral value) -> void
 {
     auto& cs = this->common_counters;
     auto it = cs.find(name);
@@ -529,6 +567,18 @@ worker_metrics_t::set_existing_counter(const std::string& name, const aggregate_
     }
 }
 
+template<typename Fn>
+auto
+worker_metrics_t::update_gauge(const std::string& name, Fn&& fun) -> void
+{
+    auto& g = this->gauges;
+    auto it = g.find(name);
+
+    if (it != std::end(g)) {
+        // None warranties on atomic assignment.
+        *it->second.get() = std::forward<Fn>(fun);
+    }
+}
 
 metrics_retriever_t::self_metrics_t::self_metrics_t(context_t& ctx, const std::string& pfx) :
    uuids_requested{detail::make_uint_counter(ctx, pfx, "uuids.requested")},
