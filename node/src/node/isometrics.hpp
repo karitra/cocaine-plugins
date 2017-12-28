@@ -33,7 +33,7 @@ namespace conf {
     constexpr auto metrics_poll_interval_s = 5u;
 }
 
-// TODO: Refactor: make small names. 
+// TODO: Refactor: make small names.
 enum class aggregate_t : unsigned {
         instant,   // treat value `as is`
         aggregate, // isolate returns accumalated value on each request (ioread, etc)
@@ -84,6 +84,10 @@ struct worker_metrics_t {
 
     auto
     assign(metrics_aggregate_proxy_t&& init) -> void;
+
+    template<typename Integral>
+    auto
+    set_existing_counter(const std::string& name, const aggregate_t desired, const Integral value = 0) -> void;
 };
 
 struct metrics_aggregate_proxy_t {
