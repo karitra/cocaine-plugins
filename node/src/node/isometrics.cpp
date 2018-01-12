@@ -226,8 +226,8 @@ namespace detail {
             auto net_it = network.find(name);
             if (net_it == std::end(network)) {
                 // It seems that metrics registration code shouldn't be here.
-                const auto rx_metric_name = cocaine::format("{}.{}", name, "rx_bytes");
-                const auto tx_metric_name = cocaine::format("{}.{}", name, "tx_bytes");
+                const auto rx_metric_name = cocaine::format("net.{}.{}", name, "rx_bytes");
+                const auto tx_metric_name = cocaine::format("net.{}.{}", name, "tx_bytes");
 
                 std::tie(net_it, std::ignore) = network.emplace(
                     name,
