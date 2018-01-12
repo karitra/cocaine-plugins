@@ -140,16 +140,16 @@ namespace detail {
     // TODO: visitor should be able to process metric based on name/type,
     //       not on value type
     //
-    struct value_processor : public boost::static_visitor<int> {
+    struct value_processor_t : public boost::static_visitor<int> {
         std::string metric_name;
         worker_metrics_t& victim;
 
-        value_processor(const std::string& metric_name, worker_metrics_t& victim) :
+        value_processor_t(const std::string& metric_name, worker_metrics_t& victim) :
             metric_name(metric_name),
             victim(victim)
         {}
 
-        // Temporary desision as `uint_t` could be gauge as well.
+        // Temporary decision as `uint_t` could be gauge as well.
         auto operator()(const dynamic_t::uint_t incoming_value) -> int {
             auto& common_counters = this->victim.common_counters;
 
@@ -192,7 +192,7 @@ namespace detail {
 
             auto updated = int{};
             for(const auto& net : value) {
-                updated += parse_network_record(net.first, net.second.as_object());
+                updated += this->parse_network_record(net.first, net.second.as_object());
             }
 
             return updated;
@@ -415,7 +415,7 @@ private:
 
             try {
                 dbg("[response] found metrics record for " << nm << ", updating...");
-                auto processor = detail::value_processor(nm, result);
+                auto processor = detail::value_processor_t(nm, result);
                 updated += value.apply(processor);
             } catch (const std::exception& err) {
                 // TODO: report to log
@@ -663,7 +663,7 @@ metrics_retriever_t::poll_metrics(const std::error_code& ec) -> void {
 
     // Note: it is promised by devs that active list should be quite
     // small ~ hundreds of workers, so it seems reasonable to pay a little for
-    // sorting here, but code should be redisigned if average alive count
+    // sorting here, but code should be redesigned if average alive count
     // will increase significantly
     boost::sort(alive_uuids);
 
