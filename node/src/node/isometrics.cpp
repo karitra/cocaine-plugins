@@ -140,6 +140,9 @@ namespace detail {
     // TODO: visitor should be able to process metric based on name/type,
     //       not on value type
     //
+    // Returns `int`: count of updated metrics, used later for detection of empty
+    // metrics for `should be alive` worker.
+    //
     struct value_processor_t : public boost::static_visitor<int> {
         std::string metric_name;
         worker_metrics_t& victim;
