@@ -109,10 +109,15 @@ class control_slot_t:
             app_name(name),
             upstream(_upstream)
         {
-            auto ovs = node.overseer(name);
-            if(!ovs) {
-                upstream.abort(error::not_running, "app is not running");
+            try {
+                if(!node.overseer(name)) {
+                    upstream.abort(error::not_running, "app is not running");
+                }
+            } catch(const std::system_error& e) {
+                upstream.abort(error::not_running,
+                    cocaine::format("app is not running, {}", e.what()));
             }
+
             catcher_t catcher(upstream);
 
             using chunk = protocol::chunk;
