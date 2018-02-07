@@ -111,7 +111,7 @@ class control_slot_t:
         {
             try {
                 if(!node.overseer(name)) {
-                    upstream.abort(error::not_running, "app is not running");
+                    throw cocaine::error_t("no overseer");
                 }
             } catch(const std::system_error& e) {
                 upstream.abort(error::not_running,
