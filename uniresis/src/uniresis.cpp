@@ -93,13 +93,14 @@ public:
     {}
 
     ~updater_t() {
+        timer.cancel();
+
         if(scope) {
             scope->close();
         }
         if (subscope) {
             subscope->close();
         }
-        timer.cancel();
     }
 
     auto
