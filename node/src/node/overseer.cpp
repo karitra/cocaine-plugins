@@ -41,6 +41,7 @@ overseer_t::~overseer_t() {
     engine->control_population(boost::none);
     engine->pool->clear();
     engine->on_spawn_rate_timer->reset();
+    engine->observers->clear();
 }
 
 auto overseer_t::active_workers() const -> std::uint32_t {
