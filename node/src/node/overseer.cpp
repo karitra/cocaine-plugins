@@ -35,13 +35,7 @@ overseer_t::overseer_t(context_t& context,
 
 overseer_t::~overseer_t() {
     COCAINE_LOG_DEBUG(engine->log, "overseer is processing terminate request");
-
-    engine->stats.deregister();
-    engine->stopped = true;
-    engine->control_population(boost::none);
-    engine->pool->clear();
-    engine->on_spawn_rate_timer->reset();
-    engine->observers->clear();
+    engine->cancel();
 }
 
 auto overseer_t::active_workers() const -> std::uint32_t {

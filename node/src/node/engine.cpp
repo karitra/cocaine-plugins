@@ -290,6 +290,15 @@ auto engine_t::prototype() -> std::unique_ptr<io::basic_dispatch_t> {
     );
 }
 
+auto engine_t::cancel() -> void {
+    this->stats.deregister();
+    this->stopped = true;
+    this->control_population(boost::none);
+    this->pool->clear();
+    this->on_spawn_rate_timer->reset();
+    this->observers->clear();
+}
+
 auto engine_t::spawn(pool_type& pool) -> void {
     spawn(id_t(), pool);
 }
