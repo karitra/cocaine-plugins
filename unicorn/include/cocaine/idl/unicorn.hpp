@@ -84,16 +84,16 @@ struct unicorn {
         * dynamic_t - additional options
         **/
         typedef boost::mpl::list<
-                cocaine::unicorn::path_t,
-                cocaine::unicorn::value_t,
-                cocaine::dynamic_t
+            cocaine::unicorn::path_t,
+            cocaine::unicorn::value_t,
+            cocaine::dynamic_t
         > argument_type;
 
         /**
         * true if node was created. Error on any kind of error
         */
         typedef option_of<
-                bool
+            bool
         >::tag upstream_type;
 
         typedef unicorn_final_tag dispatch_type;
