@@ -13,6 +13,8 @@
 #include <cocaine/unicorn/value.hpp>
 #include <cocaine/unique_id.hpp>
 
+#include <cocaine/traits/dynamic.hpp>
+
 #include "cocaine/uniresis/error.hpp"
 
 namespace cocaine {
@@ -246,12 +248,13 @@ uniresis_t::uniresis_t(context_t& context, asio::io_service& loop, const std::st
             locator->args().as_object().at("extra_param", dynamic_t::empty_object)
         );
     }
+
     auto unicorn = api::unicorn(context, args.as_object().at("unicorn", defaults::unicorn_name).as_string());
     updater.reset(new updater_t(
         std::move(path),
         std::move(hostname),
         std::move(endpoints),
-        std::move(extra),
+        extra,
         resources,
         std::move(unicorn),
         *log
@@ -268,6 +271,15 @@ uniresis_t::uniresis_t(context_t& context, asio::io_service& loop, const std::st
 
     on<io::uniresis::uuid>([&] {
         return uuid;
+    });
+
+    on<io::uniresis::extra>([=] {
+        // Note that `extra` must be captured (copied) by value, as it
+        // originally lives on ctor stack.
+        //
+        // Alternatively it is possible to capture context and retrieve
+        // cluster extra tags on every call.
+        return extra;
     });
 }
 
