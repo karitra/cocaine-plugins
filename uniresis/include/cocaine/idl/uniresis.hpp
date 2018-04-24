@@ -1,7 +1,7 @@
 #pragma once
 
-#include <cocaine/rpc/protocol.hpp>
 #include <cocaine/dynamic.hpp>
+#include <cocaine/rpc/protocol.hpp>
 
 
 namespace cocaine {
