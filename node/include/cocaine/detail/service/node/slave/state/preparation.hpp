@@ -5,6 +5,7 @@
 #include <system_error>
 
 #include <cocaine/api/authentication.hpp>
+#include <cocaine/locked_ptr.hpp>
 
 #include "cocaine/detail/service/node/forwards.hpp"
 #include "state.hpp"
@@ -21,7 +22,7 @@ class preparation_t :
     public std::enable_shared_from_this<preparation_t>
 {
     std::shared_ptr<machine_t> slave;
-
+    synchronized<bool> is_terminated;
 public:
     explicit preparation_t(std::shared_ptr<machine_t> slave);
 

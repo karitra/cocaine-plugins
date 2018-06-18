@@ -33,7 +33,8 @@ namespace ph = std::placeholders;
 using asio::ip::tcp;
 
 preparation_t::preparation_t(std::shared_ptr<machine_t> slave_) :
-    slave(std::move(slave_))
+    slave(std::move(slave_)),
+    is_terminated(false)
 {}
 
 auto preparation_t::name() const noexcept -> const char* {
@@ -41,22 +42,33 @@ auto preparation_t::name() const noexcept -> const char* {
 }
 
 auto preparation_t::terminate(const std::error_code& ec) -> void {
-    slave->shutdown(ec);
+    is_terminated.apply([&] (bool& is_terminated) {
+        if (!is_terminated) {
+            slave->shutdown(ec);
+        }
+
+        is_terminated = true;
+    });
 }
 
 auto preparation_t::start(std::chrono::milliseconds) -> void {
+
+    const auto self = shared_from_this();
+
     try {
         COCAINE_LOG_DEBUG(slave->log, "preparation start");
+
         slave->auth->token([=](api::authentication_t::token_t token, const std::error_code& ec) {
             COCAINE_LOG_DEBUG(slave->log, "preparation got token: {}", ec);
+
             slave->loop.post([=] {
-                on_refresh(token, ec);
+                self->on_refresh(token, ec);
             });
         });
     } catch (const std::exception& err) {
         COCAINE_LOG_ERROR(slave->log, "failed to start preparation state: {}", err.what());
         slave->loop.post([=] {
-            terminate(make_error_code(error::unknown_activate_error));
+            self->terminate(make_error_code(error::unknown_activate_error));
         });
     }
 }
@@ -67,9 +79,20 @@ auto preparation_t::on_refresh(api::authentication_t::token_t token, const std::
         return;
     }
 
-    auto spawning = std::make_shared<spawn_t>(slave);
-    slave->migrate(spawning);
-    spawning->spawn(token, slave->profile.timeout.spawn);
+    is_terminated.apply([&] (bool& is_terminated) {
+        if (is_terminated) {
+            COCAINE_LOG_DEBUG(slave->log, "preparation state already terminated");
+            return;
+        }
+
+        auto spawning = std::make_shared<spawn_t>(slave);
+
+        // Note that it is rare possibility that machine_t::migrate could be
+        // called shortly before this->terminate(ec), so terminate would be called
+        // on logically incorrect state. But at first glance it seems harmless.
+        slave->migrate(spawning);
+        spawning->spawn(token, slave->profile.timeout.spawn);
+    });
 }
 
 }  // namespace state
