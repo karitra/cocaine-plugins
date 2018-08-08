@@ -13,7 +13,6 @@
 #include <cocaine/rpc/actor.hpp>
 #include <cocaine/service/node/profile.hpp>
 
-#include "cocaine/api/isolate.hpp"
 #include "cocaine/api/stream.hpp"
 
 #include "cocaine/service/node/manifest.hpp"
@@ -70,9 +69,11 @@ machine_t::machine_t(context_t& context,
                      manifest_t manifest,
                      profile_t profile,
                      std::shared_ptr<api::authentication_t> auth,
+                     const std::shared_ptr<api::isolate_t>& isolate,
                      asio::io_service& loop,
                      cleanup_handler cleanup):
     log(context.log(format("{}/slave", manifest.name), {{ "uuid", id.id() }})),
+    isolate_(isolate),
     context(context),
     id(id),
     profile(profile),
@@ -214,7 +215,6 @@ auto machine_t::inject(load_t& load, channel_handler handler) -> std::uint64_t {
 
         return load;
     });
-
 
     std::chrono::milliseconds request_timeout(profile.request_timeout());
     if (auto timeout_from_header = hpack::header::convert_first<std::uint64_t>(load.event.headers, "request_timeout")) {
@@ -461,6 +461,12 @@ machine_t::dump() {
             COCAINE_LOG_WARNING(self->log, "slave is unable to save the crashlog: {}", e.what());
         }
     });
+}
+
+auto
+machine_t::isolate() -> api::isolate_t& {
+    BOOST_ASSERT(isolate_);
+    return *isolate_;
 }
 
 }  // namespace slave

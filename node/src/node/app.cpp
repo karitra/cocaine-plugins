@@ -12,7 +12,6 @@
 #include <cocaine/traits/dynamic.hpp>
 #include <cocaine/utility/future.hpp>
 
-#include "cocaine/api/isolate.hpp"
 #include "cocaine/idl/node.hpp"
 #include "cocaine/repository/isolate.hpp"
 #include "cocaine/service/node/manifest.hpp"
@@ -290,26 +289,12 @@ public:
 class spooling_t:
     public base_t
 {
-    std::shared_ptr<api::isolate_t> isolate;
     std::shared_ptr<api::cancellation_t> spooler;
-
 public:
-    spooling_t(context_t& context,
-               asio::io_service& loop,
-               const manifest_t& manifest,
-               const profile_t& profile,
-               logging::logger_t* const log,
+    spooling_t(logging::logger_t* const log,
+               const std::shared_ptr<api::isolate_t>& isolate,
                std::shared_ptr<api::spool_handle_base_t> handle)
     {
-        isolate = context.repository().get<api::isolate_t>(
-            profile.isolate.type,
-            context,
-            loop,
-            manifest.name,
-            profile.isolate.type,
-            profile.isolate.args
-        );
-
         try {
             // NOTE: Regardless of whether the asynchronous operation completes immediately or not,
             // the handler will not be invoked from within this call. Invocation of the handler
@@ -357,6 +342,7 @@ public:
               const manifest_t& manifest,
               const profile_t& profile,
               logging::logger_t* const log,
+              const std::shared_ptr<api::isolate_t>& isolate,
               std::shared_ptr<asio::io_service> loop):
         log(log),
         context(context_),
@@ -364,7 +350,14 @@ public:
     {
         // Create an Overseer - slave spawner/despawner plus the event queue dispatcher.
         overseer_ = std::make_shared<overseer_proxy_t>(
-            std::make_shared<overseer_t>(context, manifest, profile, std::make_shared<observer_adapter_t>(*this), loop)
+            std::make_shared<overseer_t>(
+                context,
+                manifest,
+                profile,
+                std::make_shared<observer_adapter_t>(*this),
+                isolate,
+                loop
+            )
         );
 
         // Create an unix actor and bind to {manifest->name}.{pid} unix-socket.
@@ -465,6 +458,7 @@ private:
             // Moreover if the context was unable to bootstrap itself it removes all services from
             // the service list (including child services). It can be that this app has been
             // removed earlier during bootstrap failure.
+            COCAINE_LOG_DEBUG(log, "unpublishing workers service from the context");
             context.remove(name);
         } catch (const std::exception& err) {
             COCAINE_LOG_WARNING(log, "failed to remove application service from the context: {}", err.what());
@@ -522,36 +516,24 @@ class cocaine::service::node::app_state_t
     const manifest_t manifest_;
     const profile_t  profile;
 
-    std::shared_ptr<asio::io_service> loop;
-
-    // Bind isolation to application lifetime to ensure,
-    // that isolation object is not being recreated all the times.
-    api::category_traits<api::isolate_t>::ptr_type isolate;
-
+    std::shared_ptr<asio::io_service> loop_;
+    std::shared_ptr<api::isolate_t> isolate_;
 public:
     app_state_t(context_t& context,
                 manifest_t manifest_,
                 profile_t profile_,
                 std::function<void(std::future<void>)> callback,
-                std::shared_ptr<asio::io_service> loop_):
+                std::shared_ptr<api::isolate_t> isolate,
+                std::shared_ptr<asio::io_service> loop):
         log(context.log(format("{}/app", manifest_.name))),
         context(context),
         state(new state::stopped_t),
         callback(std::move(callback)),
         manifest_(std::move(manifest_)),
         profile(std::move(profile_)),
-        loop(std::move(loop_)),
-        isolate()
-    {
-        isolate = context.repository().get<api::isolate_t>(
-            profile.isolate.type,
-            context,
-            *loop,
-            manifest().name,
-            profile.isolate.type,
-            profile.isolate.args
-        );
-    }
+        loop_(std::move(loop)),
+        isolate_(std::move(isolate))
+    {}
 
     auto logger() noexcept -> logging::logger_t& {
         return *log;
@@ -578,15 +560,13 @@ public:
                 throw std::logic_error("invalid state");
             }
 
-            COCAINE_LOG_DEBUG(log, "app is spooling");
-            state.reset(new state::spooling_t(
-                context,
-                *loop,
-                manifest(),
-                profile,
+            COCAINE_LOG_INFO(log, "app is spooling");
+
+            state = std::make_unique<state::spooling_t>(
                 log.get(),
+                isolate_,
                 std::make_shared<spool_handle_t>(shared_from_this())
-            ));
+            );
         });
     }
 
@@ -610,7 +590,7 @@ private:
             COCAINE_LOG_ERROR(p->log, "unable to spool app, [{}] {} - {}", ec.value(), ec.message(), reason);
             // Post the completion handler to be sure it will be called in a I/O thread to
             // avoid possible deadlocks.
-            p->loop->post(std::bind(&app_state_t::cancel, p, ec));
+            p->loop_->post(std::bind(&app_state_t::cancel, p, ec));
 
             p->callback(make_exceptional_future<void>(std::system_error(ec, reason)));
         }
@@ -624,7 +604,7 @@ private:
             }
 
             COCAINE_LOG_DEBUG(p->log, "application has been spooled");
-            p->loop->dispatch(std::bind(&app_state_t::publish, p));
+            p->loop_->dispatch(std::bind(&app_state_t::publish, p));
         }
 
         spool_handle_t(const std::shared_ptr<app_state_t>& _parent) :
@@ -643,7 +623,14 @@ private:
 
         try {
             state.synchronize()->reset(
-                new state::running_t(context, manifest(), profile, log.get(), loop)
+                new state::running_t(
+                    context,
+                    manifest(),
+                    profile,
+                    log.get(),
+                    isolate_,
+                    loop_
+                )
             );
             callback(make_ready_future());
         } catch (const std::system_error& err) {
@@ -664,19 +651,32 @@ private:
 
 app_t::app_t(context_t& context,
              const std::string& name,
-             const std::string& profile,
+             const std::string& profile_name,
              std::function<void(std::future<void> future)> callback):
     loop(std::make_shared<asio::io_service>()),
     work(std::make_unique<asio::io_service::work>(*loop)),
     thread(nullptr)
 {
+    const profile_t profile{context, profile_name};
+
+    isolate_ = context.repository().get<api::isolate_t>(
+        profile.isolate.type,
+        context,
+        *loop,
+        name,
+        profile.isolate.type,
+        profile.isolate.args
+    );
+
     state = std::make_shared<app_state_t>(
         context,
         manifest_t(context, name),
-        profile_t(context, profile),
+        profile,
         std::move(callback),
+        isolate_,
         loop
     );
+
     COCAINE_LOG_DEBUG(state->logger(), "application has initialized its internal state");
 
     state->spool();

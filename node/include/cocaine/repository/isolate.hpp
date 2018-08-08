@@ -30,6 +30,9 @@
 namespace cocaine {
 namespace api {
 
+///
+/// Repository's class default_factory implementation for `isolate_t`.
+///
 template<>
 struct category_traits<isolate_t> {
     typedef isolate_ptr ptr_type;
@@ -45,22 +48,8 @@ struct category_traits<isolate_t> {
         virtual
         ptr_type
         get(context_t& context, asio::io_service& io_context, const std::string& name, const std::string& type, const dynamic_t& args) {
-            ptr_type instance;
-
-            instances.apply([&](std::map<std::string, std::weak_ptr<isolate_t>>& instances) {
-                auto weak_ptr = instances[name];
-
-                if ((instance = weak_ptr.lock()) == nullptr) {
-                    instance = std::make_shared<T>(context, io_context, name, type, args);
-                    instances[name] = instance;
-                }
-            });
-
-            return instance;
+            return std::make_shared<T>(context, io_context, name, type, args);
         }
-
-    private:
-        synchronized<std::map<std::string, std::weak_ptr<isolate_t>>> instances;
     };
 };
 

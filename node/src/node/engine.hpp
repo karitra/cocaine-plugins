@@ -5,6 +5,7 @@
 
 #include <boost/optional.hpp>
 
+#include <cocaine/forwards.hpp>
 #include <cocaine/rpc/dispatch.hpp>
 
 #include "cocaine/idl/node.hpp"
@@ -78,6 +79,8 @@ public:
     /// Statistics.
     stats_t stats;
 
+    const std::shared_ptr<api::isolate_t> isolate_;
+
     /// Isolation daemon's workers metrics sampler.
     /// Poll sequence should be initialized explicitly with
     /// metrics_retriever_t::ignite_poll method or implicitly
@@ -88,6 +91,7 @@ public:
              manifest_t manifest,
              profile_t profile,
              std::shared_ptr<pool_observer> observer,
+             const std::shared_ptr<api::isolate_t>& isolate,
              std::shared_ptr<asio::io_service> loop);
 
     ~engine_t();

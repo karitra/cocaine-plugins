@@ -13,6 +13,7 @@
 #include <metrics/metric.hpp>
 #include <metrics/usts/ewma.hpp>
 
+#include <cocaine/forwards.hpp>
 #include <cocaine/logging.hpp>
 
 #include "cocaine/idl/rpc.hpp"
@@ -63,7 +64,7 @@ public:
 
 private:
     const std::unique_ptr<cocaine::logging::logger_t> log;
-
+    const std::shared_ptr<api::isolate_t> isolate_;
 public:
     context_t& context;
 
@@ -127,6 +128,7 @@ public:
               manifest_t manifest,
               profile_t profile,
               std::shared_ptr<api::authentication_t> auth,
+              const std::shared_ptr<api::isolate_t>& isolate,
               asio::io_service& loop,
               cleanup_handler cleanup);
 
@@ -172,6 +174,8 @@ public:
     auto
     uptime() const -> std::chrono::seconds;
 
+    auto
+    isolate() -> api::isolate_t&;
 private:
     void
     output(const char* data, size_t size);

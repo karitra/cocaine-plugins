@@ -21,8 +21,9 @@ overseer_t::overseer_t(context_t& context,
                        manifest_t manifest,
                        profile_t profile,
                        std::shared_ptr<pool_observer> observer,
+                       const std::shared_ptr<api::isolate_t>& isolate,
                        std::shared_ptr<asio::io_service> loop)
-    : engine(std::make_shared<engine_t>(context, manifest, profile, observer, loop))
+    : engine(std::make_shared<engine_t>(context, manifest, profile, observer, isolate, loop))
 {
     try {
         engine->start_isolate_metrics_poll();

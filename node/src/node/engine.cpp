@@ -53,6 +53,7 @@ engine_t::engine_t(context_t& context,
                    manifest_t manifest,
                    profile_t profile,
                    std::shared_ptr<pool_observer> observer,
+                   const std::shared_ptr<api::isolate_t>& isolate,
                    std::shared_ptr<asio::io_service> loop):
     log(context.log(format("{}/overseer", manifest.name))),
     context(context),
@@ -64,7 +65,8 @@ engine_t::engine_t(context_t& context,
     loop(loop),
     pool_target{},
     last_timeout(std::chrono::seconds(1)),
-    stats(context, manifest_.name, std::chrono::seconds(2))
+    stats(context, manifest_.name, std::chrono::seconds(2)),
+    isolate_(isolate)
 {
     attach_pool_observer(std::move(observer));
     COCAINE_LOG_DEBUG(log, "overseer has been initialized");
@@ -100,20 +102,10 @@ auto engine_t::pooled_workers_ids() const -> std::vector<std::string> {
 auto
 engine_t::start_isolate_metrics_poll() -> void
 {
-    auto isolate = profile_.apply([&](const profile_t& profile) {
-        return context.repository().get<api::isolate_t>(
-        profile.isolate.type,
-        context,
-        *loop,
-        manifest_.name,
-        profile.isolate.type,
-        profile.isolate.args);
-    });
-
     metrics_retriever = metrics_retriever_t::make_and_ignite(
         context,
         manifest_.name,
-        isolate,
+        isolate_,
         shared_from_this(),
         *loop,
         observers);
@@ -339,7 +331,7 @@ auto engine_t::spawn(id_t id, pool_type& pool) -> void {
     // constructor.
     pool.insert(std::make_pair(
         id.id(),
-        slave_t(context, id, manifest(), profile, auth, *loop,
+        slave_t(context, id, manifest(), profile, auth, isolate_, *loop,
             std::bind(&engine_t::on_slave_death, shared_from_this(), ph::_1, id.id()))
     ));
 

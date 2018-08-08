@@ -4,6 +4,7 @@
 
 #include <boost/optional.hpp>
 
+#include <cocaine/forwards.hpp>
 #include <cocaine/rpc/dispatch.hpp>
 
 #include "cocaine/idl/node.hpp"
@@ -30,6 +31,7 @@ public:
                manifest_t manifest,
                profile_t profile,
                std::shared_ptr<pool_observer> observer,
+               const std::shared_ptr<api::isolate_t>& isolate,
                std::shared_ptr<asio::io_service> loop);
 
     /// TODO: Docs.

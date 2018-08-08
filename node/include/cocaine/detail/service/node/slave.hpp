@@ -48,6 +48,7 @@ public:
             manifest_t manifest,
             profile_t profile,
             std::shared_ptr<api::authentication_t> auth,
+            const std::shared_ptr<api::isolate_t>& isolate,
             asio::io_service& loop,
             cleanup_handler fn);
     slave_t(const slave_t& other) = delete;

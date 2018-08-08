@@ -14,7 +14,6 @@
 #include <cocaine/trace/trace.hpp>
 #include <cocaine/detail/service/node/slave/spawn_handle.hpp>
 
-#include "cocaine/api/isolate.hpp"
 #include "cocaine/service/node/slave/id.hpp"
 
 #include "cocaine/detail/service/node/slave/machine.hpp"
@@ -105,15 +104,6 @@ auto spawn_t::spawn(api::authentication_t::token_t token, unsigned long timeout)
 
     // Spawn a worker instance and start reading standard outputs of it.
     try {
-        auto isolate = slave->context.repository().get<api::isolate_t>(
-            slave->profile.isolate.type,
-            slave->context,
-            slave->loop,
-            slave->manifest.name,
-            slave->profile.isolate.type,
-            slave->profile.isolate.args
-        );
-
         COCAINE_LOG_DEBUG(slave->log, "spawning");
 
         timer.expires_from_now(boost::posix_time::milliseconds(static_cast<std::int64_t>(timeout)));
@@ -131,12 +121,14 @@ auto spawn_t::spawn(api::authentication_t::token_t token, unsigned long timeout)
             env["COCAINE_APP_TOKEN_BODY"] = token.body;
         }
 
-        handle = isolate->spawn(
+        handle = slave->isolate().spawn(
             slave->manifest.executable,
             args,
             std::move(env),
             std::move(spawn_handle)
         );
+
+        COCAINE_LOG_INFO(slave->log, "spawn has been started for worker {} of '{}'", slave->id.id(), slave->manifest.name);
     } catch (const std::system_error& err) {
         COCAINE_LOG_ERROR(slave->log, "unable to spawn slave: {}", error::to_string(err));
 
