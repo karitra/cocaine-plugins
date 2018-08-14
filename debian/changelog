@@ -1,3 +1,10 @@
+cocaine-plugins (0.12.14.69) unstable; urgency=low
+
+  * Fixed: hold copy of isolate object in app_t, along with app's io loop,
+    instead of repository cache.
+
+ -- Alex Karev <karapuz@yandex-team.ru>  Tue, 14 Aug 2018 11:27:18 +0300
+
 cocaine-plugins (0.12.14.68) unstable; urgency=low
 
   * refact: Data structs in vicodyn dispatcher
