@@ -23,6 +23,8 @@ using namespace asio::ip;
 namespace {
 namespace defaults {
 
+constexpr auto notification_interval = 1;
+
 const std::string locator_name = "locator";
 const std::string unicorn_name = "core";
 const std::string resources_path = "/resources";
@@ -105,14 +107,19 @@ public:
 
     auto
     notify() -> void {
-        COCAINE_LOG_DEBUG(log, "schedule resource notification on `{}` ...", path);
-        scope = unicorn->create(
-            std::bind(&updater_t::on_create, this, ph::_1),
-            path,
-            make_value(),
-            true,
-            false
-        );
+        try {
+            COCAINE_LOG_DEBUG(log, "schedule resource notification on `{}` ...", path);
+            scope = unicorn->create(
+                std::bind(&updater_t::on_create, this, ph::_1),
+                path,
+                make_value(),
+                true,
+                false
+            );
+        } catch(const std::system_error& err) {
+            COCAINE_LOG_ERROR(log, "failed to register 'on_create' callback", error::to_string(err));
+            notify_later();
+        }
     }
 
 private:
@@ -138,8 +145,13 @@ private:
 
     auto
     notify_later() -> void {
-        COCAINE_LOG_DEBUG(log, "schedule resource notification after {} sec ...", 1);
-        timer.expires_from_now(boost::posix_time::seconds(1));
+        COCAINE_LOG_DEBUG(
+            log,
+            "schedule resource notification after {} sec ...",
+            defaults::notification_interval
+        );
+
+        timer.expires_from_now(boost::posix_time::seconds(defaults::notification_interval));
         timer.async_wait([=](std::error_code ec) {
             if (ec) {
                 return;
