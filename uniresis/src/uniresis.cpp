@@ -9,6 +9,7 @@
 #include <cocaine/context.hpp>
 #include <cocaine/context/config.hpp>
 #include <cocaine/dynamic.hpp>
+#include <cocaine/errors.hpp>
 #include <cocaine/executor/asio.hpp>
 #include <cocaine/unicorn/value.hpp>
 #include <cocaine/unique_id.hpp>
@@ -22,6 +23,11 @@ using namespace asio::ip;
 
 namespace {
 namespace defaults {
+
+// Original value was 1 second, probably it was selected to avoid
+// flap on ephemeral node creation as much as possible, but it seems too often
+// in case of thundering herd.
+constexpr auto notification_interval = 3;
 
 const std::string locator_name = "locator";
 const std::string unicorn_name = "core";
@@ -138,8 +144,13 @@ private:
 
     auto
     notify_later() -> void {
-        COCAINE_LOG_DEBUG(log, "schedule resource notification after {} sec ...", 1);
-        timer.expires_from_now(boost::posix_time::seconds(1));
+        COCAINE_LOG_DEBUG(
+            log,
+            "schedule resource notification after {} sec ...",
+            defaults::notification_interval
+        );
+
+        timer.expires_from_now(boost::posix_time::seconds(defaults::notification_interval));
         timer.async_wait([=](std::error_code ec) {
             if (ec) {
                 return;
@@ -162,6 +173,11 @@ private:
                 notify_later();
             }
         } catch (const std::system_error& err) {
+            if (err.code().value() == error::node_exists) {
+                COCAINE_LOG_WARNING(log, "node `{}` already exist: {}", path, error::to_string(err));
+                return subscribe();
+            }
+
             COCAINE_LOG_ERROR(log, "failed to create `{}` node: {}", path, error::to_string(err));
             notify_later();
         } catch (const std::exception& err) {
@@ -184,15 +200,28 @@ private:
         COCAINE_LOG_DEBUG(log, "received node update on `{}` path", path);
 
         try {
-            auto value = future.get();
-            if (value.version() == 0) {
-                return;
+            switch (const auto version = future.get().version()) {
+                // In expected state.
+                case 0:
+                    return;
+                // In case of `no exist` version flag, recreate and subscribe after delay.
+                case unicorn::not_existing_version:
+                    return notify_later();
+                // Incorrect state, should be at least reported, probably should
+                // try to resubscribe after some delay (code could be redesign after
+                // gaining more information from running in production environment).
+                default:
+                    COCAINE_LOG_WARNING(
+                        log,
+                        "received node update on `{}`, version {}, but it shouldn't",
+                        path,
+                        version
+                    );
+                    return;
             }
-
-            COCAINE_LOG_WARNING(log, "received node update on `{}`, but it shouldn't", path);
         } catch (const std::exception& err) {
             COCAINE_LOG_ERROR(log, "failed to hold subscription on `{}` node: {}", path, err.what());
-            notify();
+            notify_later();
         }
     }
 };
