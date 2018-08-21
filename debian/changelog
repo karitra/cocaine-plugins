@@ -1,3 +1,10 @@
+cocaine-plugins (0.12.14.70) unstable; urgency=medium
+
+  * Fixed(uniresis): start node create sequence in case of `not exist`
+    error in subscription.
+
+ -- Alex Karev <karapuz@yandex-team.ru>  Tue, 21 Aug 2018 18:42:46 +0300
+
 cocaine-plugins (0.12.14.69) unstable; urgency=low
 
   * Fixed: hold copy of isolate object in app_t, along with app's io loop,
